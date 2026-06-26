@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import ExcelJS from 'exceljs';
 import { 
   FileSpreadsheet, 
@@ -6,12 +6,24 @@ import {
   Menu, 
   X, 
   FileDown, 
-  Loader
+  Loader,
+  Trash2
 } from 'lucide-react';
 
 // Shared Components
 import { Toast } from '../shared/components/Toast';
 import { ThemeToggle } from '../shared/components/ThemeToggle';
+
+// Shared Utils
+import { 
+  saveProject, 
+  updateProjectMetadata, 
+  getProjectMetadata, 
+  getProjectBuffers, 
+  listProjects, 
+  deleteProject,
+  ProjectMetadata 
+} from '../shared/utils/db';
 
 // Feature: Sheet Viewer
 import { SheetViewer } from '../features/sheet-viewer/components/SheetViewer';
@@ -53,6 +65,164 @@ export const App: React.FC = () => {
   const [progress, setProgress] = useState<TranslationProgress | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  // History States
+  const [historyList, setHistoryList] = useState<ProjectMetadata[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+
+  // Helper to format language label
+  const getLanguageLabel = (langCode: string): string => {
+    const langs: { [key: string]: string } = {
+      vi: 'Tiếng Việt',
+      en: 'Tiếng Anh',
+      ja: 'Tiếng Nhật',
+      zh: 'Tiếng Trung',
+      ko: 'Tiếng Hàn',
+    };
+    return langs[langCode] || langCode.toUpperCase();
+  };
+
+  // Helper to format time ago
+  const formatTimeAgo = (timestamp: number): string => {
+    const diffMs = Date.now() - timestamp;
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'Vừa xong';
+    if (diffMins < 60) return `${diffMins} phút trước`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours} giờ trước`;
+    const date = new Date(timestamp);
+    return `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+  };
+
+  // Load saved session list and active session on mount
+  useEffect(() => {
+    const initSession = async () => {
+      setLoading(true);
+      try {
+        const list = await listProjects();
+        setHistoryList(list);
+        
+        const lastActiveId = localStorage.getItem('active_project_id');
+        if (lastActiveId) {
+          await loadHistoryProject(lastActiveId);
+        } else {
+          const firstProj = list[0];
+          if (firstProj) {
+            await loadHistoryProject(firstProj.id);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to initialize session list:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    initSession();
+  }, []);
+
+  // Restore project buffers and parameters from history ID
+  const loadHistoryProject = async (id: string) => {
+    setLoading(true);
+    try {
+      const meta = await getProjectMetadata(id);
+      if (!meta) return;
+
+      const buffers = await getProjectBuffers(id);
+      if (!buffers) return;
+
+      // Restore original workbook
+      const origWb = new ExcelJS.Workbook();
+      await origWb.xlsx.load(buffers.origBuffer);
+      setOrigWorkbook(origWb);
+      setSheetNames(origWb.worksheets.map(s => s.name));
+
+      // Restore translated workbook if it exists
+      if (buffers.transBuffer) {
+        const transWb = new ExcelJS.Workbook();
+        await transWb.xlsx.load(buffers.transBuffer);
+        setTransWorkbook(transWb);
+      } else {
+        setTransWorkbook(null);
+      }
+
+      // Restore parameters
+      setActiveSheetIndex(meta.activeSheetIndex);
+      setActiveTab(meta.activeTab);
+      setTargetLang(meta.targetLang);
+      setFileSizeStr(meta.fileSizeStr);
+      setActiveProjectId(id);
+      localStorage.setItem('active_project_id', id);
+
+      const mockFile = new File([buffers.origBuffer], meta.fileName, {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      setFile(mockFile);
+    } catch (err) {
+      console.error('Failed to load history project:', err);
+      showToast('Không thể tải dự án từ lịch sử.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLoadHistoryProject = async (id: string) => {
+    if (id === activeProjectId) return;
+    await loadHistoryProject(id);
+    showToast('Đã tải dự án từ lịch sử!');
+  };
+
+  const handleDeleteHistoryProject = async (id: string) => {
+    try {
+      await deleteProject(id);
+      
+      const updatedList = historyList.filter(item => item.id !== id);
+      setHistoryList(updatedList);
+      
+      if (id === activeProjectId) {
+        const nextProj = updatedList[0];
+        if (nextProj) {
+          await loadHistoryProject(nextProj.id);
+        } else {
+          setFile(null);
+          setOrigWorkbook(null);
+          setTransWorkbook(null);
+          setSheetNames([]);
+          setActiveProjectId(null);
+          localStorage.removeItem('active_project_id');
+        }
+      }
+      showToast('Đã xoá dự án khỏi lịch sử.');
+    } catch (err) {
+      console.error('Failed to delete history project:', err);
+      showToast('Lỗi khi xoá dự án khỏi lịch sử.', 'error');
+    }
+  };
+
+  // Helper to persist view state changes (tab or sheet selection)
+  const handleViewChange = async (tab: 'original' | 'translated', sheetIndex: number) => {
+    setActiveTab(tab);
+    setActiveSheetIndex(sheetIndex);
+    
+    if (activeProjectId) {
+      try {
+        const meta = await getProjectMetadata(activeProjectId);
+        if (meta) {
+          const updatedMeta = {
+            ...meta,
+            activeSheetIndex: sheetIndex,
+            activeTab: tab,
+            targetLang
+          };
+          await updateProjectMetadata(updatedMeta);
+          
+          const list = await listProjects();
+          setHistoryList(list);
+        }
+      } catch (err) {
+        console.error('Failed to update project view metadata:', err);
+      }
+    }
+  };
+
   // Toast trigger helper
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -83,6 +253,27 @@ export const App: React.FC = () => {
         throw new Error('Tệp excel không chứa worksheet nào.');
       }
 
+      // Save new project to database
+      const newId = `proj_${Date.now()}`;
+      const newMeta = {
+        id: newId,
+        fileName: selectedFile.name,
+        fileSizeStr: formatBytes(selectedFile.size),
+        timestamp: Date.now(),
+        activeSheetIndex: 0,
+        activeTab: 'original' as const,
+        targetLang
+      };
+      const newBuffers = {
+        id: newId,
+        origBuffer: arrayBuffer
+      };
+      
+      await saveProject(newMeta, newBuffers);
+      
+      const list = await listProjects();
+      setHistoryList(list);
+
       setOrigWorkbook(wb);
       setTransWorkbook(null);
       setSheetNames(wb.worksheets.map(s => s.name));
@@ -90,6 +281,9 @@ export const App: React.FC = () => {
       setActiveTab('original');
       setFile(selectedFile);
       setFileSizeStr(formatBytes(selectedFile.size));
+      setActiveProjectId(newId);
+      localStorage.setItem('active_project_id', newId);
+
       showToast('Đã tải tệp bảng tính thành công!');
     } catch (err: any) {
       console.error(err);
@@ -101,12 +295,14 @@ export const App: React.FC = () => {
     }
   };
 
-  // Clear current spreadsheet
+  // Clear current spreadsheet view
   const handleClearFile = () => {
     setFile(null);
     setOrigWorkbook(null);
     setTransWorkbook(null);
     setSheetNames([]);
+    setActiveProjectId(null);
+    localStorage.removeItem('active_project_id');
   };
 
   // Run cell translation
@@ -182,6 +378,35 @@ export const App: React.FC = () => {
 
       setTransWorkbook(clonedWb);
       setActiveTab('translated');
+
+      if (activeProjectId) {
+        try {
+          const meta = await getProjectMetadata(activeProjectId);
+          if (meta) {
+            const origBuffer = await origWorkbook.xlsx.writeBuffer();
+            const transBuffer = await clonedWb.xlsx.writeBuffer();
+            
+            const updatedMeta = {
+              ...meta,
+              activeTab: 'translated' as const,
+              targetLang,
+              timestamp: Date.now()
+            };
+            
+            await saveProject(updatedMeta, {
+              id: activeProjectId,
+              origBuffer,
+              transBuffer
+            });
+            
+            const list = await listProjects();
+            setHistoryList(list);
+          }
+        } catch (dbErr) {
+          console.error('Failed to update project with translation in database:', dbErr);
+        }
+      }
+
       showToast('Dịch bảng tính thành công!');
     } catch (err: any) {
       console.error(err);
@@ -299,6 +524,48 @@ export const App: React.FC = () => {
             onTranslate={handleTranslate}
             disabled={!origWorkbook || loading}
           />
+
+          {/* Recent History List */}
+          <div className="history-section">
+            <h3 className="section-title">Lịch sử gần đây</h3>
+            {historyList.length === 0 ? (
+              <p className="history-empty">Chưa có lịch sử dịch thuật</p>
+            ) : (
+              <div className="history-list">
+                {historyList.map((item) => (
+                  <div 
+                    key={item.id} 
+                    className={`history-item ${activeProjectId === item.id ? 'active' : ''}`}
+                    onClick={() => handleLoadHistoryProject(item.id)}
+                  >
+                    <div className="history-item-info">
+                      <div className="history-item-name" title={item.fileName}>
+                        {item.fileName}
+                      </div>
+                      <div className="history-item-meta">
+                        <span>{item.fileSizeStr}</span>
+                        <span>•</span>
+                        <span>{getLanguageLabel(item.targetLang)}</span>
+                        <span>•</span>
+                        <span>{formatTimeAgo(item.timestamp)}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="history-item-delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteHistoryProject(item.id);
+                      }}
+                      title="Xoá khỏi lịch sử"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -325,7 +592,7 @@ export const App: React.FC = () => {
                 <button 
                   type="button"
                   className={`tab-btn ${activeTab === 'original' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('original')}
+                  onClick={() => handleViewChange('original', activeSheetIndex)}
                 >
                   Trước khi dịch
                 </button>
@@ -333,7 +600,7 @@ export const App: React.FC = () => {
                   type="button"
                   className={`tab-btn ${activeTab === 'translated' ? 'active' : ''}`}
                   disabled={!transWorkbook}
-                  onClick={() => setActiveTab('translated')}
+                  onClick={() => handleViewChange('translated', activeSheetIndex)}
                   title={!transWorkbook ? 'Vui lòng nhấn "Dịch Ngay" trước' : ''}
                 >
                   Sau khi dịch
@@ -365,6 +632,7 @@ export const App: React.FC = () => {
         {activeWorksheet ? (
           <SheetViewer 
             worksheet={activeWorksheet}
+            originalWorksheet={activeTab === 'translated' ? origWorkbook?.getWorksheet(activeSheetIndex + 1) : undefined}
             showGridlines={showGridlines}
           />
         ) : (
@@ -381,7 +649,7 @@ export const App: React.FC = () => {
         <SheetSelector 
           sheetNames={sheetNames}
           activeIndex={activeSheetIndex}
-          onSelect={setActiveSheetIndex}
+          onSelect={(index) => handleViewChange(activeTab, index)}
         />
       </main>
 

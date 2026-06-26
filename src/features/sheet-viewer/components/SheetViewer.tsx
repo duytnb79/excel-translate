@@ -1,13 +1,20 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { EyeOff } from 'lucide-react';
 import { argbToHex, mapAlignment, getCellText } from '../utils/excelParser';
 
 export interface SheetViewerProps {
   worksheet: any; // ExcelJS Worksheet object
+  originalWorksheet?: any; // ExcelJS Worksheet object for original text hover
   showGridlines: boolean;
 }
 
-export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, showGridlines }) => {
+export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWorksheet, showGridlines }) => {
+  // Tooltip hover state
+  const [hoveredCell, setHoveredCell] = useState<{
+    text: string;
+    rect: DOMRect;
+  } | null>(null);
+
   // 1. Calculate bounding box of cells with data
   const bounds = useMemo(() => {
     if (!worksheet) return { maxRow: 1, maxCol: 1 };
@@ -174,20 +181,32 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, showGridlin
         >
           <colgroup>
             {/* The Row Header Column */}
-            <col style={{ width: '40px' }} />
+            <col style={{ width: '40px', minWidth: '40px' }} />
             {colWidths.map((w, i) => (
-              <col key={i} style={{ width: `${w}px` }} />
+              <col key={i} style={{ width: `${w}px`, minWidth: `${w}px` }} />
             ))}
           </colgroup>
           
           <thead>
             <tr>
-              <th className="excel-hdr corner"></th>
-              {Array.from({ length: bounds.maxCol }).map((_, c) => (
-                <th key={c} className="excel-hdr col-header" style={{ height: '22px' }}>
-                  {getColLetter(c + 1)}
-                </th>
-              ))}
+              <th className="excel-hdr corner" style={{ width: '40px', minWidth: '40px', height: '22px' }}></th>
+              {Array.from({ length: bounds.maxCol }).map((_, c) => {
+                const w = colWidths[c] || 100;
+                return (
+                  <th 
+                    key={c} 
+                    className="excel-hdr col-header" 
+                    style={{ 
+                      width: `${w}px`, 
+                      minWidth: `${w}px`,
+                      maxWidth: `${w}px`,
+                      height: '22px' 
+                    }}
+                  >
+                    {getColLetter(c + 1)}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           
@@ -196,6 +215,57 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, showGridlin
               const r = rIndex + 1; // 1-indexed row
               const rowHeight = rowHeights[rIndex];
               
+              // Calculate dynamic column overflows for this row
+              const overflowSpans = new Array(bounds.maxCol + 1).fill(1);
+              const overflowSkips = new Array(bounds.maxCol + 1).fill(false);
+              
+              if (worksheet) {
+                for (let c = 1; c <= bounds.maxCol; c++) {
+                  const cell = worksheet.getCell(r, c);
+                  if (cell.isMerged && cell.master.address !== cell.address) {
+                    continue;
+                  }
+                  
+                  if (overflowSkips[c]) {
+                    continue;
+                  }
+                  
+                  const val = getCellText(cell);
+                  if (val !== '') {
+                    let colSpan = 1;
+                    if (cell.isMerged && cell.master.address === cell.address) {
+                      let nextC = c + 1;
+                      while (nextC <= bounds.maxCol) {
+                        const nextCell = worksheet.getCell(r, nextC);
+                        if (nextCell.isMerged && nextCell.master.address === cell.address) {
+                          colSpan++;
+                          nextC++;
+                        } else {
+                          break;
+                        }
+                      }
+                    } else {
+                      let nextC = c + 1;
+                      while (nextC <= bounds.maxCol) {
+                        const nextCell = worksheet.getCell(r, nextC);
+                        const nextVal = getCellText(nextCell);
+                        if (nextVal === '' && !nextCell.isMerged) {
+                          colSpan++;
+                          nextC++;
+                        } else {
+                          break;
+                        }
+                      }
+                    }
+                    
+                    overflowSpans[c] = colSpan;
+                    for (let i = c + 1; i < c + colSpan; i++) {
+                      overflowSkips[i] = true;
+                    }
+                  }
+                }
+              }
+
               return (
                 <tr key={r} style={{ height: `${rowHeight}px` }}>
                   {/* Row number header */}
@@ -210,23 +280,16 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, showGridlin
                       return null; // Skip rendering, master cell handles it
                     }
 
-                    // Calculate colSpan & rowSpan if it's the master cell of a merged range
-                    let colSpan = 1;
+                    // Skip cells consumed by left cell text overflow
+                    if (overflowSkips[c]) {
+                      return null;
+                    }
+
+                    const colSpan = overflowSpans[c];
+
+                    // Count rows merged (rowSpan)
                     let rowSpan = 1;
                     if (cell.isMerged && cell.master.address === cell.address) {
-                      // Count columns merged
-                      let nextC = c + 1;
-                      while (nextC <= bounds.maxCol) {
-                        const nextCell = worksheet.getCell(r, nextC);
-                        if (nextCell.isMerged && nextCell.master.address === cell.address) {
-                          colSpan++;
-                          nextC++;
-                        } else {
-                          break;
-                        }
-                      }
-                      
-                      // Count rows merged
                       let nextR = r + 1;
                       while (nextR <= bounds.maxRow) {
                         const nextCell = worksheet.getCell(nextR, c);
@@ -268,17 +331,36 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, showGridlin
                     const alignStyle = mapAlignment(cell.alignment);
                     Object.assign(cellStyle, alignStyle);
 
+                    // Get original text for comparison
+                    const origCell = originalWorksheet ? originalWorksheet.getCell(r, c) : null;
+                    const origText = origCell ? getCellText(origCell) : '';
+
                     // Get value to display
                     const displayValue = getCellText(cell);
+
+                    // Check if cell is translated
+                    const isTranslated = origText && origText !== displayValue;
 
                     return (
                       <td
                         key={c}
                         colSpan={colSpan > 1 ? colSpan : undefined}
                         rowSpan={rowSpan > 1 ? rowSpan : undefined}
-                        className="excel-cell"
+                        className={`excel-cell ${isTranslated ? 'translated-cell-hover' : ''}`}
                         style={cellStyle}
-                        title={displayValue}
+                        title={isTranslated ? undefined : displayValue}
+                        onMouseEnter={(e) => {
+                          if (isTranslated && origText) {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setHoveredCell({
+                              text: origText,
+                              rect
+                            });
+                          }
+                        }}
+                        onMouseLeave={() => {
+                          setHoveredCell(null);
+                        }}
                       >
                         {displayValue}
                       </td>
@@ -290,6 +372,24 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, showGridlin
           </tbody>
         </table>
       </div>
+
+      {hoveredCell && (
+        <div 
+          className="cell-hover-tooltip"
+          style={{
+            position: 'fixed',
+            left: `${hoveredCell.rect.left + hoveredCell.rect.width / 2}px`,
+            top: `${hoveredCell.rect.top - 6}px`,
+            transform: 'translate(-50%, -100%)',
+            zIndex: 9999,
+            pointerEvents: 'none'
+          }}
+        >
+          <div className="tooltip-title">Bản gốc</div>
+          <div className="tooltip-content">{hoveredCell.text}</div>
+          <div className="tooltip-arrow" />
+        </div>
+      )}
     </div>
   );
 };
