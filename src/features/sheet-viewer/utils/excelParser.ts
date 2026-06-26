@@ -60,7 +60,7 @@ export function mapAlignment(alignment: any): React.CSSProperties {
     styles.verticalAlign = alignment.vertical === 'middle' ? 'middle' : alignment.vertical;
   }
   if (alignment.wrapText) {
-    styles.whiteSpace = 'normal';
+    styles.whiteSpace = 'pre-wrap';
     styles.wordBreak = 'break-word';
   }
   return styles;
@@ -98,8 +98,15 @@ export function getCellText(cell: any): string {
       }
       
       // If it's a hyperlink cell: { text: '...', hyperlink: '...' }
-      if (val.text && val.hyperlink) {
-        return String(val.text);
+      if (val.hyperlink) {
+        const textVal = val.text;
+        if (textVal && typeof textVal === 'object') {
+          if (textVal.richText) {
+            return textVal.richText.map((t: any) => t?.text || '').join('');
+          }
+          return String(textVal.value !== undefined ? textVal.value : JSON.stringify(textVal));
+        }
+        return String(textVal !== undefined ? textVal : val.hyperlink);
       }
       
       // If it's a nested value object: { value: ... }

@@ -61,6 +61,7 @@ export const App: React.FC = () => {
   // UI Layout States
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'original' | 'translated'>('original');
+  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [loading, setLoading] = useState<boolean>(false);
   const [progress, setProgress] = useState<TranslationProgress | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -607,6 +608,27 @@ export const App: React.FC = () => {
                 </button>
               </div>
             )}
+
+            {/* Zoom Selector Dropdown */}
+            {origWorkbook && (
+              <div className="zoom-container" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '8px' }}>
+                <select 
+                  className="input-field" 
+                  style={{ padding: '2px 6px', height: '26px', fontSize: '12px', width: '75px', borderRadius: '6px', cursor: 'pointer' }}
+                  value={zoomLevel}
+                  onChange={(e) => setZoomLevel(parseFloat(e.target.value))}
+                  title="Tỷ lệ thu phóng"
+                >
+                  <option value="0.5">50%</option>
+                  <option value="0.75">75%</option>
+                  <option value="0.9">90%</option>
+                  <option value="1">100%</option>
+                  <option value="1.25">125%</option>
+                  <option value="1.5">150%</option>
+                  <option value="2">200%</option>
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="top-bar-right">
@@ -634,6 +656,7 @@ export const App: React.FC = () => {
             worksheet={activeWorksheet}
             originalWorksheet={activeTab === 'translated' ? origWorkbook?.getWorksheet(activeSheetIndex + 1) : undefined}
             showGridlines={showGridlines}
+            zoomLevel={zoomLevel}
           />
         ) : (
           <div className="sheet-empty-state" style={{ flex: 1 }}>

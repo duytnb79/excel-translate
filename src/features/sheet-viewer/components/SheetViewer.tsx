@@ -6,9 +6,15 @@ export interface SheetViewerProps {
   worksheet: any; // ExcelJS Worksheet object
   originalWorksheet?: any; // ExcelJS Worksheet object for original text hover
   showGridlines: boolean;
+  zoomLevel: number;
 }
 
-export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWorksheet, showGridlines }) => {
+export const SheetViewer: React.FC<SheetViewerProps> = ({ 
+  worksheet, 
+  originalWorksheet, 
+  showGridlines, 
+  zoomLevel 
+}) => {
   // Tooltip hover state
   const [hoveredCell, setHoveredCell] = useState<{
     text: string;
@@ -29,46 +35,175 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
       });
     });
     
-    // Add small buffer for display aesthetics
+    // Ensure we render at least 15 rows and 15 columns for typical spreadsheet view aesthetics (+10 row/col buffer)
     return {
-      maxRow: Math.min(maxRow + 3, worksheet.rowCount || 100),
-      maxCol: Math.min(maxCol + 2, worksheet.columnCount || 26),
+      maxRow: Math.max(maxRow + 10, 15),
+      maxCol: Math.max(maxCol + 10, 15),
     };
   }, [worksheet]);
 
-  // 2. Define row heights and column widths in pixels
-  const { rowHeights, colWidths, totalWidth, totalHeight } = useMemo(() => {
-    const heights: number[] = [];
-    const widths: number[] = [];
-    
-    let wSum = 0;
-    let hSum = 0;
+  // 2. Define resizable row heights and column widths in pixels
+  let [colWidths, setColWidths] = useState<number[]>([]);
+  let [rowHeights, setRowHeights] = useState<number[]>([]);
+  const [prevKey, setPrevKey] = useState<string>('');
+  const [isResizing, setIsResizing] = useState(false);
 
+  const currentKey = `${worksheet ? worksheet.id || worksheet.name || 'sheet' : ''}_${bounds.maxRow}_${bounds.maxCol}`;
+
+  if (currentKey !== prevKey) {
+    setPrevKey(currentKey);
+    const widths: number[] = [];
+    const heights: number[] = [];
     if (worksheet) {
-      // Column Widths: 1-indexed
       for (let c = 1; c <= bounds.maxCol; c++) {
         const col = worksheet.getColumn(c);
-        const w = col && col.width ? Math.round(col.width * 8 + 10) : 100;
-        widths.push(w);
-        wSum += w;
+        widths.push(col && col.width ? Math.round(col.width * 8 + 10) : 80);
       }
-      
-      // Row Heights: 1-indexed
       for (let r = 1; r <= bounds.maxRow; r++) {
         const row = worksheet.getRow(r);
-        const h = row && row.height ? Math.round(row.height * 1.33) : 22;
-        heights.push(h);
-        hSum += h;
+        heights.push(row && row.height ? Math.round(row.height * 1.33) : 20);
+      }
+    }
+    setColWidths(widths);
+    setRowHeights(heights);
+    colWidths = widths;
+    rowHeights = heights;
+  }
+
+  const totalWidth = useMemo(() => {
+    return colWidths.reduce((sum, w) => sum + w, 0);
+  }, [colWidths]);
+
+  const totalHeight = useMemo(() => {
+    return rowHeights.reduce((sum, h) => sum + h, 0);
+  }, [rowHeights]);
+
+  // Handler for column resizing
+  const startColResize = (e: React.MouseEvent, colIndex: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizing(true);
+    const startX = e.clientX;
+    const startWidth = colWidths[colIndex] || 80;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = (moveEvent.clientX - startX) / zoomLevel;
+      const newWidth = Math.max(30, Math.round(startWidth + deltaX));
+      setColWidths((prev) => {
+        const updated = [...prev];
+        updated[colIndex] = newWidth;
+        return updated;
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // Handler for row resizing
+  const startRowResize = (e: React.MouseEvent, rowIndex: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizing(true);
+    const startY = e.clientY;
+    const startHeight = rowHeights[rowIndex] || 20;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaY = (moveEvent.clientY - startY) / zoomLevel;
+      const newHeight = Math.max(15, Math.round(startHeight + deltaY));
+      setRowHeights((prev) => {
+        const updated = [...prev];
+        updated[rowIndex] = newHeight;
+        return updated;
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // Handler for column double click (Auto-fit or reset to initial width)
+  const handleColDoubleClick = (colIndex: number) => {
+    if (!worksheet) return;
+    
+    const col = worksheet.getColumn(colIndex + 1);
+    const initialWidth = col && col.width ? Math.round(col.width * 8 + 10) : 80;
+    
+    const c = colIndex + 1;
+    let maxLen = 0;
+    for (let r = 1; r <= bounds.maxRow; r++) {
+      const cell = worksheet.getCell(r, c);
+      if (cell.isMerged && cell.master.address !== cell.address) continue;
+      const text = getCellText(cell);
+      if (text) {
+        const lines = text.split('\n');
+        for (const line of lines) {
+          if (line.length > maxLen) maxLen = line.length;
+        }
       }
     }
     
-    return {
-      rowHeights: heights,
-      colWidths: widths,
-      totalWidth: wSum,
-      totalHeight: hSum
-    };
-  }, [worksheet, bounds]);
+    const autoFitWidth = maxLen > 0 ? Math.max(80, Math.min(350, Math.round(maxLen * 7.5 + 20))) : 80;
+    
+    setColWidths((prev) => {
+      const updated = [...prev];
+      const currentWidth = updated[colIndex];
+      if (Math.abs(currentWidth - autoFitWidth) < 2 && currentWidth !== initialWidth) {
+        updated[colIndex] = initialWidth;
+      } else {
+        updated[colIndex] = autoFitWidth;
+      }
+      return updated;
+    });
+  };
+
+  // Handler for row double click (Auto-fit or reset to initial height)
+  const handleRowDoubleClick = (rowIndex: number) => {
+    if (!worksheet) return;
+    
+    const row = worksheet.getRow(rowIndex + 1);
+    const initialHeight = row && row.height ? Math.round(row.height * 1.33) : 20;
+    
+    const r = rowIndex + 1;
+    let maxLines = 1;
+    let hasBold = false;
+    for (let c = 1; c <= bounds.maxCol; c++) {
+      const cell = worksheet.getCell(r, c);
+      if (cell.isMerged && cell.master.address !== cell.address) continue;
+      const text = getCellText(cell);
+      if (text) {
+        const lineCount = text.split('\n').length;
+        if (lineCount > maxLines) maxLines = lineCount;
+        if (cell.font && cell.font.bold) hasBold = true;
+      }
+    }
+    
+    const lineHeight = hasBold ? 18 : 16;
+    const autoFitHeight = Math.max(20, maxLines * lineHeight + 8);
+    
+    setRowHeights((prev) => {
+      const updated = [...prev];
+      const currentHeight = updated[rowIndex];
+      if (Math.abs(currentHeight - autoFitHeight) < 2 && currentHeight !== initialHeight) {
+        updated[rowIndex] = initialHeight;
+      } else {
+        updated[rowIndex] = autoFitHeight;
+      }
+      return updated;
+    });
+  };
 
   // 3. Extract and map images from worksheet
   const images = useMemo(() => {
@@ -166,19 +301,39 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
 
   return (
     <div className="sheet-container">
-      <div style={{ position: 'relative', width: `${totalWidth + 40}px`, height: `${totalHeight + 22}px` }}>
-        
-        {/* Render images absolute overlays */}
-        {images.map((img: any) => (
-          <div key={img.id} className="sheet-image-overlay" style={img.style}>
-            <img src={img.src} alt="Spreadsheet Attachment" />
-          </div>
-        ))}
-
-        <table 
-          className={`excel-table ${showGridlines ? '' : 'no-gridlines'}`}
-          style={{ width: `${totalWidth + 40}px` }}
+      {/* Outer bounding wrapper with scaled width/height to support custom viewport scrolling */}
+      <div 
+        style={{ 
+          width: `${(totalWidth + 40) * zoomLevel}px`, 
+          height: `${(totalHeight + 22) * zoomLevel}px`,
+          position: 'relative',
+          overflow: 'hidden'
+        }}
+      >
+        {/* Inner scaled canvas */}
+        <div 
+          style={{ 
+            position: 'absolute', 
+            left: 0, 
+            top: 0, 
+            width: `${totalWidth + 40}px`, 
+            height: `${totalHeight + 22}px`,
+            transform: `scale(${zoomLevel})`,
+            transformOrigin: 'top left'
+          }}
         >
+          
+          {/* Render images absolute overlays */}
+          {images.map((img: any) => (
+            <div key={img.id} className="sheet-image-overlay" style={img.style}>
+              <img src={img.src} alt="Spreadsheet Attachment" />
+            </div>
+          ))}
+
+          <table 
+            className={`excel-table ${showGridlines ? '' : 'no-gridlines'}`}
+            style={{ width: `${totalWidth + 40}px` }}
+          >
           <colgroup>
             {/* The Row Header Column */}
             <col style={{ width: '40px', minWidth: '40px' }} />
@@ -191,19 +346,26 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
             <tr>
               <th className="excel-hdr corner" style={{ width: '40px', minWidth: '40px', height: '22px' }}></th>
               {Array.from({ length: bounds.maxCol }).map((_, c) => {
-                const w = colWidths[c] || 100;
+                const w = colWidths[c] || 80;
                 return (
                   <th 
                     key={c} 
-                    className="excel-hdr col-header" 
+                    className="excel-hdr col-header resizable-hdr" 
                     style={{ 
                       width: `${w}px`, 
                       minWidth: `${w}px`,
                       maxWidth: `${w}px`,
-                      height: '22px' 
+                      height: '22px',
+                      position: 'relative'
                     }}
                   >
                     {getColLetter(c + 1)}
+                    <div 
+                      className="col-resize-handle"
+                      onMouseDown={(e) => startColResize(e, c)}
+                      onDoubleClick={() => handleColDoubleClick(c)}
+                      title="Nhấp đúp chuột để tự động căn chỉnh vừa văn bản hoặc khôi phục kích thước ban đầu"
+                    />
                   </th>
                 );
               })}
@@ -269,7 +431,18 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
               return (
                 <tr key={r} style={{ height: `${rowHeight}px` }}>
                   {/* Row number header */}
-                  <td className="excel-hdr row-header">{r}</td>
+                  <td 
+                    className="excel-hdr row-header resizable-hdr"
+                    style={{ position: 'relative' }}
+                  >
+                    {r}
+                    <div 
+                      className="row-resize-handle"
+                      onMouseDown={(e) => startRowResize(e, rIndex)}
+                      onDoubleClick={() => handleRowDoubleClick(rIndex)}
+                      title="Nhấp đúp chuột để tự động căn chỉnh vừa văn bản hoặc khôi phục kích thước ban đầu"
+                    />
+                  </td>
                   
                   {Array.from({ length: bounds.maxCol }).map((_, cIndex) => {
                     const c = cIndex + 1; // 1-indexed column
@@ -327,19 +500,39 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
                       }
                     }
                     
+                    // Get value to display
+                    const displayValue = getCellText(cell);
+
                     // Map alignment
                     const alignStyle = mapAlignment(cell.alignment);
                     Object.assign(cellStyle, alignStyle);
+
+                    // Force pre-wrap if displayValue contains a newline
+                    if (displayValue && displayValue.includes('\n')) {
+                      cellStyle.whiteSpace = 'pre-wrap';
+                      cellStyle.wordBreak = 'break-word';
+                    }
 
                     // Get original text for comparison
                     const origCell = originalWorksheet ? originalWorksheet.getCell(r, c) : null;
                     const origText = origCell ? getCellText(origCell) : '';
 
-                    // Get value to display
-                    const displayValue = getCellText(cell);
-
                     // Check if cell is translated
                     const isTranslated = origText && origText !== displayValue;
+
+                    // Handle hyperlinks rendering
+                    const isHyperlink = cell.value && typeof cell.value === 'object' && cell.value.hyperlink;
+                    const cellContent = isHyperlink ? (
+                      <a
+                        href={cell.value.hyperlink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="cell-link"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {displayValue}
+                      </a>
+                    ) : displayValue;
 
                     return (
                       <td
@@ -350,7 +543,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
                         style={cellStyle}
                         title={isTranslated ? undefined : displayValue}
                         onMouseEnter={(e) => {
-                          if (isTranslated && origText) {
+                          if (!isResizing && isTranslated && origText) {
                             const rect = e.currentTarget.getBoundingClientRect();
                             setHoveredCell({
                               text: origText,
@@ -362,7 +555,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
                           setHoveredCell(null);
                         }}
                       >
-                        {displayValue}
+                        {cellContent}
                       </td>
                     );
                   })}
@@ -372,6 +565,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
           </tbody>
         </table>
       </div>
+    </div>
 
       {hoveredCell && (
         <div 
@@ -384,8 +578,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({ worksheet, originalWor
             zIndex: 9999,
             pointerEvents: 'none'
           }}
-        >
-          <div className="tooltip-title">Bản gốc</div>
+        > 
           <div className="tooltip-content">{hoveredCell.text}</div>
           <div className="tooltip-arrow" />
         </div>
