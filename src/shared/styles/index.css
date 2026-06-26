@@ -19,7 +19,7 @@
 
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --sidebar-width: 280px;
-  --header-height: 48px;
+  --header-height: 40px;
 }
 
 [data-theme="dark"] {
@@ -141,15 +141,32 @@ body {
   background-color: var(--bg-app);
 }
 
-.top-bar {
-  height: var(--header-height);
+.global-toolbar {
+  height: 38px;
+  background-color: #f0f4f9;
+  border-bottom: 1px solid #cbd5e1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  flex-shrink: 0;
+  width: 100%;
+}
+
+[data-theme="dark"] .global-toolbar {
+  background-color: #0b0f19;
+  border-bottom: 1px solid #1e293b;
+}
+
+.global-mode-bar {
+  height: 32px;
   background-color: var(--bg-panel);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 12px;
   flex-shrink: 0;
+  width: 100%;
 }
 
 .top-bar-left {
@@ -249,11 +266,16 @@ input, select, button {
   width: 28px;
   height: 28px;
   padding: 0;
+  border: none;
+  background: transparent;
   border-radius: 4px;
   color: var(--text-sub);
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
 }
 
 .btn-icon:hover {
@@ -297,30 +319,51 @@ input, select, button {
 /* Tabs */
 .tabs-container {
   display: flex;
-  background-color: var(--bg-hover);
-  padding: 2px;
-  border-radius: 6px;
-  gap: 2px;
+  background-color: transparent;
+  padding: 0;
+  gap: 4px;
 }
 
 .tab-btn {
-  flex: 1;
-  padding: 6px 12px;
+  padding: 4px 10px;
+  height: 28px;
   border-radius: 4px;
   border: none;
   background: transparent;
   color: var(--text-sub);
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.15s ease;
   text-align: center;
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab-btn:hover:not(:disabled) {
+  background-color: rgba(0, 0, 0, 0.06);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] .tab-btn:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 .tab-btn.active {
-  background-color: var(--bg-panel);
-  color: var(--text-main);
-  box-shadow: var(--shadow);
+  background-color: #c2e7ff;
+  color: #001d35;
+  font-weight: 600;
+}
+
+[data-theme="dark"] .tab-btn.active {
+  background-color: #1e293b;
+  color: #38bdf8;
+}
+
+.tab-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Language selector */
@@ -887,6 +930,165 @@ input:checked + .slider:before {
 
 .history-item.active .history-item-delete:hover {
   background-color: rgba(239, 68, 68, 0.1);
+}
+
+/* Custom Styled Select for Zoom & Reset Sizing Toolbar */
+.zoom-select {
+  appearance: none;
+  background-color: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 20px 4px 8px;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-sub);
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 10px;
+}
+
+.zoom-select:hover {
+  background-color: rgba(0, 0, 0, 0.06);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] .zoom-select:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Toolbar Button (Flat, borderless with pill hover) */
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-sub);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  outline: none;
+}
+
+.toolbar-btn:hover {
+  background-color: rgba(0, 0, 0, 0.06);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] .toolbar-btn:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.toolbar-btn:active {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="dark"] .toolbar-btn:active {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.toolbar-btn svg {
+  color: var(--text-muted);
+  transition: color 0.15s;
+}
+
+.toolbar-btn:hover svg {
+  color: var(--text-main);
+}
+
+/* Toolbar Divider (Subtle thin vertical line) */
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background-color: #cbd5e1;
+  margin: 0 4px;
+  align-self: center;
+}
+
+[data-theme="dark"] .toolbar-divider {
+  background-color: #334155;
+}
+
+/* Font Size Controls (Sheets style: - [value] +) */
+.font-size-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.font-size-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background-color: transparent;
+  border-radius: 4px;
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--text-sub);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.font-size-btn:hover {
+  background-color: rgba(0, 0, 0, 0.06);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] .font-size-btn:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.font-size-box {
+  min-width: 28px;
+  height: 20px;
+  border: 1px solid #cbd5e1;
+  background-color: #ffffff;
+  color: var(--text-main);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  padding: 0 4px;
+}
+
+[data-theme="dark"] .font-size-box {
+  border-color: #475569;
+  background-color: #1e293b;
+}
+
+/* Global toolbar button hovers for consistency (e.g. ThemeToggle) */
+.global-toolbar .btn-icon {
+  background-color: transparent;
+  border: none;
+  color: var(--text-sub);
+  transition: all 0.15s ease;
+}
+
+.global-toolbar .btn-icon:hover {
+  background-color: rgba(0, 0, 0, 0.06);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] .global-toolbar .btn-icon:hover {
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 

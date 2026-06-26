@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useImperativeHandle, forwardRef } from 'react';
 import { EyeOff } from 'lucide-react';
 import { argbToHex, mapAlignment, getCellText } from '../utils/excelParser';
 
@@ -7,14 +7,21 @@ export interface SheetViewerProps {
   originalWorksheet?: any; // ExcelJS Worksheet object for original text hover
   showGridlines: boolean;
   zoomLevel: number;
+  fontSizeOffset?: number;
 }
 
-export const SheetViewer: React.FC<SheetViewerProps> = ({ 
+export interface SheetViewerRef {
+  autoFitAll: () => void;
+  resetAll: () => void;
+}
+
+export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({ 
   worksheet, 
   originalWorksheet, 
   showGridlines, 
-  zoomLevel 
-}) => {
+  zoomLevel,
+  fontSizeOffset = 0
+}, ref) => {
   // Tooltip hover state
   const [hoveredCell, setHoveredCell] = useState<{
     text: string;
@@ -23,7 +30,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
 
   // 1. Calculate bounding box of cells with data
   const bounds = useMemo(() => {
-    if (!worksheet) return { maxRow: 1, maxCol: 1 };
+    if (!worksheet) return { maxRow: 1, maxCol: 1, actualMaxRow: 1, actualMaxCol: 1 };
     
     let maxRow = 1;
     let maxCol = 1;
@@ -37,6 +44,8 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
     
     // Ensure we render at least 15 rows and 15 columns for typical spreadsheet view aesthetics (+10 row/col buffer)
     return {
+      actualMaxRow: maxRow,
+      actualMaxCol: maxCol,
       maxRow: Math.max(maxRow + 10, 15),
       maxCol: Math.max(maxCol + 10, 15),
     };
@@ -143,7 +152,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
     
     const c = colIndex + 1;
     let maxLen = 0;
-    for (let r = 1; r <= bounds.maxRow; r++) {
+    for (let r = 1; r <= bounds.actualMaxRow; r++) {
       const cell = worksheet.getCell(r, c);
       if (cell.isMerged && cell.master.address !== cell.address) continue;
       const text = getCellText(cell);
@@ -159,7 +168,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
     
     setColWidths((prev) => {
       const updated = [...prev];
-      const currentWidth = updated[colIndex];
+      const currentWidth = updated[colIndex] ?? initialWidth;
       if (Math.abs(currentWidth - autoFitWidth) < 2 && currentWidth !== initialWidth) {
         updated[colIndex] = initialWidth;
       } else {
@@ -179,7 +188,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
     const r = rowIndex + 1;
     let maxLines = 1;
     let hasBold = false;
-    for (let c = 1; c <= bounds.maxCol; c++) {
+    for (let c = 1; c <= bounds.actualMaxCol; c++) {
       const cell = worksheet.getCell(r, c);
       if (cell.isMerged && cell.master.address !== cell.address) continue;
       const text = getCellText(cell);
@@ -195,7 +204,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
     
     setRowHeights((prev) => {
       const updated = [...prev];
-      const currentHeight = updated[rowIndex];
+      const currentHeight = updated[rowIndex] ?? initialHeight;
       if (Math.abs(currentHeight - autoFitHeight) < 2 && currentHeight !== initialHeight) {
         updated[rowIndex] = initialHeight;
       } else {
@@ -204,6 +213,67 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
       return updated;
     });
   };
+
+  // Expose autoFitAll and resetAll to ref
+  useImperativeHandle(ref, () => ({
+    autoFitAll: () => {
+      if (!worksheet) return;
+      const newWidths = [...colWidths];
+      for (let cIndex = 0; cIndex < bounds.actualMaxCol; cIndex++) {
+        const c = cIndex + 1;
+        let maxLen = 0;
+        for (let r = 1; r <= bounds.actualMaxRow; r++) {
+          const cell = worksheet.getCell(r, c);
+          if (cell.isMerged && cell.master.address !== cell.address) continue;
+          const text = getCellText(cell);
+          if (text) {
+            const lines = text.split('\n');
+            for (const line of lines) {
+              if (line.length > maxLen) maxLen = line.length;
+            }
+          }
+        }
+        newWidths[cIndex] = maxLen > 0 ? Math.max(80, Math.min(350, Math.round(maxLen * 7.5 + 20))) : 80;
+      }
+      setColWidths(newWidths);
+
+      const newHeights = [...rowHeights];
+      for (let rIndex = 0; rIndex < bounds.actualMaxRow; rIndex++) {
+        const r = rIndex + 1;
+        let maxLines = 1;
+        let hasBold = false;
+        for (let c = 1; c <= bounds.actualMaxCol; c++) {
+          const cell = worksheet.getCell(r, c);
+          if (cell.isMerged && cell.master.address !== cell.address) continue;
+          const text = getCellText(cell);
+          if (text) {
+            const lineCount = text.split('\n').length;
+            if (lineCount > maxLines) maxLines = lineCount;
+            if (cell.font && cell.font.bold) hasBold = true;
+          }
+        }
+        const lineHeight = hasBold ? 18 : 16;
+        newHeights[rIndex] = Math.max(20, maxLines * lineHeight + 8);
+      }
+      setRowHeights(newHeights);
+    },
+    
+    resetAll: () => {
+      if (!worksheet) return;
+      const widths: number[] = [];
+      const heights: number[] = [];
+      for (let c = 1; c <= bounds.maxCol; c++) {
+        const col = worksheet.getColumn(c);
+        widths.push(col && col.width ? Math.round(col.width * 8 + 10) : 80);
+      }
+      for (let r = 1; r <= bounds.maxRow; r++) {
+        const row = worksheet.getRow(r);
+        heights.push(row && row.height ? Math.round(row.height * 1.33) : 20);
+      }
+      setColWidths(widths);
+      setRowHeights(heights);
+    }
+  }));
 
   // 3. Extract and map images from worksheet
   const images = useMemo(() => {
@@ -381,8 +451,8 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
               const overflowSpans = new Array(bounds.maxCol + 1).fill(1);
               const overflowSkips = new Array(bounds.maxCol + 1).fill(false);
               
-              if (worksheet) {
-                for (let c = 1; c <= bounds.maxCol; c++) {
+              if (worksheet && r <= bounds.actualMaxRow) {
+                for (let c = 1; c <= bounds.actualMaxCol; c++) {
                   const cell = worksheet.getCell(r, c);
                   if (cell.isMerged && cell.master.address !== cell.address) {
                     continue;
@@ -397,7 +467,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
                     let colSpan = 1;
                     if (cell.isMerged && cell.master.address === cell.address) {
                       let nextC = c + 1;
-                      while (nextC <= bounds.maxCol) {
+                      while (nextC <= bounds.actualMaxCol) {
                         const nextCell = worksheet.getCell(r, nextC);
                         if (nextCell.isMerged && nextCell.master.address === cell.address) {
                           colSpan++;
@@ -408,7 +478,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
                       }
                     } else {
                       let nextC = c + 1;
-                      while (nextC <= bounds.maxCol) {
+                      while (nextC <= bounds.actualMaxCol) {
                         const nextCell = worksheet.getCell(r, nextC);
                         const nextVal = getCellText(nextCell);
                         if (nextVal === '' && !nextCell.isMerged) {
@@ -446,6 +516,20 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
                   
                   {Array.from({ length: bounds.maxCol }).map((_, cIndex) => {
                     const c = cIndex + 1; // 1-indexed column
+                    const isBufferCell = r > bounds.actualMaxRow || c > bounds.actualMaxCol;
+
+                    if (isBufferCell) {
+                      return (
+                        <td
+                          key={c}
+                          className="excel-cell"
+                          style={{ fontSize: `${12 + fontSizeOffset}px` }}
+                        >
+                          {''}
+                        </td>
+                      );
+                    }
+
                     const cell = worksheet.getCell(r, c);
                     
                     // Merged cell management
@@ -464,7 +548,7 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
                     let rowSpan = 1;
                     if (cell.isMerged && cell.master.address === cell.address) {
                       let nextR = r + 1;
-                      while (nextR <= bounds.maxRow) {
+                      while (nextR <= bounds.actualMaxRow) {
                         const nextCell = worksheet.getCell(nextR, c);
                         if (nextCell.isMerged && nextCell.master.address === cell.address) {
                           rowSpan++;
@@ -490,7 +574,10 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
                     if (cell.font) {
                       if (cell.font.bold) cellStyle.fontWeight = 'bold';
                       if (cell.font.italic) cellStyle.fontStyle = 'italic';
-                      if (cell.font.size) cellStyle.fontSize = `${Math.min(cell.font.size, 16)}px`;
+                      
+                      const baseFontSize = cell.font.size ? Math.min(cell.font.size, 16) : 12;
+                      cellStyle.fontSize = `${baseFontSize + fontSizeOffset}px`;
+                      
                       const fontColorHex = argbToHex(cell.font.color?.argb || cell.font.color);
                       if (fontColorHex) {
                         cellStyle.color = fontColorHex;
@@ -498,6 +585,8 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
                       if (cell.font.underline) {
                         cellStyle.textDecoration = 'underline';
                       }
+                    } else {
+                      cellStyle.fontSize = `${12 + fontSizeOffset}px`;
                     }
                     
                     // Get value to display
@@ -585,4 +674,4 @@ export const SheetViewer: React.FC<SheetViewerProps> = ({
       )}
     </div>
   );
-};
+});

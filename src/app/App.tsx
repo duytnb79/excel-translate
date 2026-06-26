@@ -3,11 +3,10 @@ import ExcelJS from 'exceljs';
 import { 
   FileSpreadsheet, 
   Globe, 
-  Menu, 
-  X, 
   FileDown, 
   Loader,
-  Trash2
+  Trash2,
+  PanelLeftClose
 } from 'lucide-react';
 
 // Shared Components
@@ -28,6 +27,7 @@ import {
 // Feature: Sheet Viewer
 import { SheetViewer } from '../features/sheet-viewer/components/SheetViewer';
 import { SheetSelector } from '../features/sheet-viewer/components/SheetSelector';
+import { SheetToolbar } from '../features/sheet-viewer/components/SheetToolbar';
 import { getCellText, setCellText, needsTranslation } from '../features/sheet-viewer/utils/excelParser';
 
 // Feature: Translator
@@ -49,7 +49,6 @@ export const App: React.FC = () => {
   const [origWorkbook, setOrigWorkbook] = useState<ExcelJS.Workbook | null>(null);
   const [transWorkbook, setTransWorkbook] = useState<ExcelJS.Workbook | null>(null);
   const [activeSheetIndex, setActiveSheetIndex] = useState<number>(0);
-  const [sheetNames, setSheetNames] = useState<string[]>([]);
   
   // Translation Config States
   const [sourceLang, setSourceLang] = useState<string>('auto');
@@ -62,6 +61,31 @@ export const App: React.FC = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'original' | 'translated'>('original');
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
+  const [fontSizeOffset, setFontSizeOffset] = useState<number>(0);
+  const [isAllAutoFitted, setIsAllAutoFitted] = useState<boolean>(false);
+  const sheetViewerRef = React.useRef<any>(null);
+
+  // Derive sheetNames dynamically from the active workbook
+  const sheetNames = useMemo(() => {
+    const wb = activeTab === 'original' ? origWorkbook : transWorkbook;
+    if (!wb) return [];
+    return wb.worksheets.map(s => s.name);
+  }, [activeTab, origWorkbook, transWorkbook]);
+
+  // Reset auto-fit toggle when sheet or workbook changes
+  useEffect(() => {
+    setIsAllAutoFitted(false);
+  }, [activeSheetIndex, origWorkbook]);
+
+  const handleToggleAutoFitAll = () => {
+    if (isAllAutoFitted) {
+      sheetViewerRef.current?.resetAll();
+      setIsAllAutoFitted(false);
+    } else {
+      sheetViewerRef.current?.autoFitAll();
+      setIsAllAutoFitted(true);
+    }
+  };
   const [loading, setLoading] = useState<boolean>(false);
   const [progress, setProgress] = useState<TranslationProgress | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -134,7 +158,6 @@ export const App: React.FC = () => {
       const origWb = new ExcelJS.Workbook();
       await origWb.xlsx.load(buffers.origBuffer);
       setOrigWorkbook(origWb);
-      setSheetNames(origWb.worksheets.map(s => s.name));
 
       // Restore translated workbook if it exists
       if (buffers.transBuffer) {
@@ -186,7 +209,6 @@ export const App: React.FC = () => {
           setFile(null);
           setOrigWorkbook(null);
           setTransWorkbook(null);
-          setSheetNames([]);
           setActiveProjectId(null);
           localStorage.removeItem('active_project_id');
         }
@@ -277,7 +299,6 @@ export const App: React.FC = () => {
 
       setOrigWorkbook(wb);
       setTransWorkbook(null);
-      setSheetNames(wb.worksheets.map(s => s.name));
       setActiveSheetIndex(0);
       setActiveTab('original');
       setFile(selectedFile);
@@ -301,7 +322,6 @@ export const App: React.FC = () => {
     setFile(null);
     setOrigWorkbook(null);
     setTransWorkbook(null);
-    setSheetNames([]);
     setActiveProjectId(null);
     localStorage.removeItem('active_project_id');
   };
@@ -324,9 +344,12 @@ export const App: React.FC = () => {
       const clonedWb = new ExcelJS.Workbook();
       await clonedWb.xlsx.load(originalBuffer);
 
-      // 2. Fetch cell unique text collections
+      // 2. Fetch cell unique text collections and sheet names
       const textsToTranslate: string[] = [];
       clonedWb.eachSheet((sheet) => {
+        if (needsTranslation(sheet.name)) {
+          textsToTranslate.push(sheet.name);
+        }
         sheet.eachRow((row) => {
           row.eachCell((cell) => {
             const txt = getCellText(cell);
@@ -362,8 +385,32 @@ export const App: React.FC = () => {
         localStorage.setItem('gemini_api_key', geminiApiKey);
       }
 
-      // 4. Overwrite text values in clone workbook
+      // 4. Overwrite text values and sheet names in clone workbook
       clonedWb.eachSheet((sheet) => {
+        if (translationMap.has(sheet.name)) {
+          const translatedName = translationMap.get(sheet.name);
+          if (translatedName) {
+            let sanitized = translatedName.replace(/[\\\/?:*\[\]]/g, '').trim();
+            if (sanitized.length > 31) {
+              sanitized = sanitized.slice(0, 31);
+            }
+            if (sanitized && sanitized !== sheet.name) {
+              let uniqueName = sanitized;
+              let counter = 1;
+              while (clonedWb.worksheets.some(w => w.name.toLowerCase() === uniqueName.toLowerCase() && w !== sheet)) {
+                const suffix = ` (${counter})`;
+                const availableLen = 31 - suffix.length;
+                uniqueName = sanitized.slice(0, availableLen) + suffix;
+                counter++;
+              }
+              try {
+                sheet.name = uniqueName;
+              } catch (e) {
+                console.warn('Failed to rename sheet:', e);
+              }
+            }
+          }
+        }
         sheet.eachRow((row) => {
           row.eachCell((cell) => {
             const txt = getCellText(cell);
@@ -484,7 +531,7 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Sidebar Control Panel */}
+      {/* Sidebar Control Panel (Left, 100% height) */}
       <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-header">
           <div className="logo">
@@ -497,7 +544,7 @@ export const App: React.FC = () => {
             title="Thu gọn menu" 
             onClick={() => setSidebarCollapsed(true)}
           >
-            <X size={16} />
+            <PanelLeftClose size={16} />
           </button>
         </div>
 
@@ -570,93 +617,75 @@ export const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main Grid Viewport */}
+      {/* Main Panel Viewport (Right side of sidebar) */}
       <main className="main-panel">
-        
-        {/* Top Header Bar */}
-        <header className="top-bar">
-          <div className="top-bar-left">
-            {sidebarCollapsed && (
-              <button 
-                type="button"
-                className="btn-icon" 
-                title="Mở menu" 
-                onClick={() => setSidebarCollapsed(false)}
-              >
-                <Menu size={16} />
-              </button>
-            )}
-            
-            {/* Before/After Tabs */}
-            {origWorkbook && (
-              <div className="tabs-container">
+        {/* Row 1: Global Toolbar inside main panel */}
+        {origWorkbook && (
+          <div className="global-toolbar">
+            <SheetToolbar 
+              sidebarCollapsed={sidebarCollapsed}
+              setSidebarCollapsed={setSidebarCollapsed}
+              hasWorkbook={!!origWorkbook}
+              zoomLevel={zoomLevel}
+              onZoomChange={setZoomLevel}
+              isAllAutoFitted={isAllAutoFitted}
+              onToggleAutoFitAll={handleToggleAutoFitAll}
+              fontSizeOffset={fontSizeOffset}
+              onFontSizeOffsetChange={setFontSizeOffset}
+            />
+            <div className="top-bar-right">
+              {/* Download Button */}
+              {transWorkbook && activeTab === 'translated' && (
                 <button 
                   type="button"
-                  className={`tab-btn ${activeTab === 'original' ? 'active' : ''}`}
-                  onClick={() => handleViewChange('original', activeSheetIndex)}
+                  className="btn btn-secondary" 
+                  style={{ padding: '4px 10px', height: '28px', fontSize: '12px' }}
+                  onClick={handleDownload}
                 >
-                  Trước khi dịch
+                  <FileDown size={14} />
+                  Tải Bảng Dịch
                 </button>
-                <button 
-                  type="button"
-                  className={`tab-btn ${activeTab === 'translated' ? 'active' : ''}`}
-                  disabled={!transWorkbook}
-                  onClick={() => handleViewChange('translated', activeSheetIndex)}
-                  title={!transWorkbook ? 'Vui lòng nhấn "Dịch Ngay" trước' : ''}
-                >
-                  Sau khi dịch
-                </button>
-              </div>
-            )}
+              )}
 
-            {/* Zoom Selector Dropdown */}
-            {origWorkbook && (
-              <div className="zoom-container" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '8px' }}>
-                <select 
-                  className="input-field" 
-                  style={{ padding: '2px 6px', height: '26px', fontSize: '12px', width: '75px', borderRadius: '6px', cursor: 'pointer' }}
-                  value={zoomLevel}
-                  onChange={(e) => setZoomLevel(parseFloat(e.target.value))}
-                  title="Tỷ lệ thu phóng"
-                >
-                  <option value="0.5">50%</option>
-                  <option value="0.75">75%</option>
-                  <option value="0.9">90%</option>
-                  <option value="1">100%</option>
-                  <option value="1.25">125%</option>
-                  <option value="1.5">150%</option>
-                  <option value="2">200%</option>
-                </select>
-              </div>
-            )}
+              {/* Light/Dark Toggle */}
+              <ThemeToggle theme={theme} onToggle={toggleTheme} />
+            </div>
           </div>
+        )}
 
-          <div className="top-bar-right">
-            {/* Download Button */}
-            {transWorkbook && activeTab === 'translated' && (
+        {/* Row 2: Mode Tab Bar inside main panel */}
+        {origWorkbook && (
+          <div className="global-mode-bar">
+            <div className="tabs-container">
               <button 
                 type="button"
-                className="btn btn-secondary" 
-                style={{ padding: '4px 10px', height: '28px', fontSize: '12px' }}
-                onClick={handleDownload}
+                className={`tab-btn ${activeTab === 'original' ? 'active' : ''}`}
+                onClick={() => handleViewChange('original', activeSheetIndex)}
               >
-                <FileDown size={14} />
-                Tải Bảng Dịch
+                Trước khi dịch
               </button>
-            )}
-
-            {/* Light/Dark Toggle */}
-            <ThemeToggle theme={theme} onToggle={toggleTheme} />
+              <button 
+                type="button"
+                className={`tab-btn ${activeTab === 'translated' ? 'active' : ''}`}
+                disabled={!transWorkbook}
+                onClick={() => handleViewChange('translated', activeSheetIndex)}
+                title={!transWorkbook ? 'Vui lòng nhấn "Dịch Ngay" trước' : ''}
+              >
+                Sau khi dịch
+              </button>
+            </div>
           </div>
-        </header>
+        )}
 
-        {/* Excel Spreadsheet render viewport */}
+        {/* Spreadsheet rendering workspace */}
         {activeWorksheet ? (
           <SheetViewer 
+            ref={sheetViewerRef}
             worksheet={activeWorksheet}
             originalWorksheet={activeTab === 'translated' ? origWorkbook?.getWorksheet(activeSheetIndex + 1) : undefined}
             showGridlines={showGridlines}
             zoomLevel={zoomLevel}
+            fontSizeOffset={fontSizeOffset}
           />
         ) : (
           <div className="sheet-empty-state" style={{ flex: 1 }}>
@@ -679,3 +708,4 @@ export const App: React.FC = () => {
     </div>
   );
 };
+
