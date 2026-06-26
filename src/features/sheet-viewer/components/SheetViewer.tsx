@@ -1,13 +1,15 @@
-import React, { useMemo, useState, useImperativeHandle, forwardRef } from 'react';
+import React, { useMemo, useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { EyeOff } from 'lucide-react';
 import { argbToHex, mapAlignment, getCellText } from '../utils/excelParser';
 
 export interface SheetViewerProps {
   worksheet: any; // ExcelJS Worksheet object
   originalWorksheet?: any; // ExcelJS Worksheet object for original text hover
+  translatedWorksheet?: any; // ExcelJS Worksheet object for translated text copy
   showGridlines: boolean;
   zoomLevel: number;
   fontSizeOffset?: number;
+  onShowToast?: (message: string, type?: 'success' | 'error') => void;
 }
 
 export interface SheetViewerRef {
@@ -18,9 +20,11 @@ export interface SheetViewerRef {
 export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({ 
   worksheet, 
   originalWorksheet, 
+  translatedWorksheet,
   showGridlines, 
   zoomLevel,
-  fontSizeOffset = 0
+  fontSizeOffset = 0,
+  onShowToast
 }, ref) => {
   // Tooltip hover state
   const [hoveredCell, setHoveredCell] = useState<{
@@ -28,26 +32,164 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
     rect: DOMRect;
   } | null>(null);
 
-  // 1. Calculate bounding box of cells with data
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    row: number;
+    col: number;
+  }>({
+    visible: false,
+    x: 0,
+    y: 0,
+    row: 0,
+    col: 0
+  });
+
+  // Handle cell context menu (right click)
+  const handleCellContextMenu = (e: React.MouseEvent, r: number, c: number) => {
+    e.preventDefault();
+    
+    const menuWidth = 160;
+    const menuHeight = 70;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    let posX = e.clientX;
+    let posY = e.clientY;
+
+    if (posX + menuWidth > viewportWidth) {
+      posX = viewportWidth - menuWidth - 8;
+    }
+    if (posY + menuHeight > viewportHeight) {
+      posY = viewportHeight - menuHeight - 8;
+    }
+
+    setContextMenu({
+      visible: true,
+      x: posX,
+      y: posY,
+      row: r,
+      col: c
+    });
+  };
+
+  // Handle text copying
+  const handleCopy = async (type: 'original' | 'translated') => {
+    const r = contextMenu.row;
+    const c = contextMenu.col;
+    
+    setContextMenu(prev => ({ ...prev, visible: false }));
+
+    if (!worksheet) return;
+
+    let textToCopy = '';
+    
+    if (type === 'original') {
+      const origCell = originalWorksheet ? originalWorksheet.getCell(r, c) : worksheet.getCell(r, c);
+      textToCopy = getCellText(origCell);
+    } else {
+      const transCell = translatedWorksheet ? translatedWorksheet.getCell(r, c) : null;
+      if (transCell) {
+        textToCopy = getCellText(transCell);
+      } else {
+        if (onShowToast) {
+          onShowToast('Không có bản dịch cho ô này.', 'error');
+        }
+        return;
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      if (onShowToast) {
+        onShowToast(type === 'original' ? 'Đã copy bản gốc!' : 'Đã copy bản dịch!');
+      }
+    } catch (err) {
+      console.error('Failed to copy to clipboard:', err);
+      if (onShowToast) {
+        onShowToast('Không thể copy vào clipboard.', 'error');
+      }
+    }
+  };
+
+  // Click outside / Scroll / Escape keydown event listeners to close menu
+  useEffect(() => {
+    if (!contextMenu.visible) return;
+
+    const handleDismiss = (e: Event) => {
+      const menuEl = document.getElementById('sheet-cell-context-menu');
+      if (menuEl && menuEl.contains(e.target as Node)) {
+        return;
+      }
+      setContextMenu(prev => ({ ...prev, visible: false }));
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setContextMenu(prev => ({ ...prev, visible: false }));
+      }
+    };
+
+    window.addEventListener('click', handleDismiss);
+    window.addEventListener('scroll', handleDismiss, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', handleDismiss);
+      window.removeEventListener('scroll', handleDismiss, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu.visible]);
+
+
+  // 1. Calculate bounding box of cells with data and images
   const bounds = useMemo(() => {
     if (!worksheet) return { maxRow: 1, maxCol: 1, actualMaxRow: 1, actualMaxCol: 1 };
     
     let maxRow = 1;
     let maxCol = 1;
     
+    // Check cell positions
     worksheet.eachRow((row: any, rowNumber: number) => {
       if (rowNumber > maxRow) maxRow = rowNumber;
       row.eachCell((_cell: any, colNumber: number) => {
         if (colNumber > maxCol) maxCol = colNumber;
       });
     });
+
+    // Check image positions to prevent cutoffs
+    try {
+      const wsImages = worksheet.getImages();
+      if (wsImages && wsImages.length > 0) {
+        wsImages.forEach((img: any) => {
+          const tl = img.range.tl || img.range.from;
+          const br = img.range.br || img.range.to;
+          if (tl) {
+            const fromRow = Math.ceil(tl.row) + 1;
+            const fromCol = Math.ceil(tl.col) + 1;
+            if (fromRow > maxRow) maxRow = fromRow;
+            if (fromCol > maxCol) maxCol = fromCol;
+          }
+          if (br) {
+            const toRow = Math.ceil(br.row) + 1;
+            const toCol = Math.ceil(br.col) + 1;
+            if (toRow > maxRow) maxRow = toRow;
+            if (toCol > maxCol) maxCol = toCol;
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('Error checking image bounds:', e);
+    }
     
-    // Ensure we render at least 15 rows and 15 columns for typical spreadsheet view aesthetics (+10 row/col buffer)
+    // Ensure we render at least 15 rows/cols, with a 100 row and 30 column buffer for spacing & images
     return {
       actualMaxRow: maxRow,
       actualMaxCol: maxCol,
-      maxRow: Math.max(maxRow + 10, 15),
-      maxCol: Math.max(maxCol + 10, 15),
+      maxRow: Math.max(maxRow + 100, 15),
+      maxCol: Math.max(maxCol + 30, 15),
     };
   }, [worksheet]);
 
@@ -291,43 +433,83 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
         const blob = new Blob([imageObj.buffer], { type: `image/${imageObj.extension}` });
         const dataUrl = URL.createObjectURL(blob);
         
-        // Calculate image positions in pixels using colWidths and rowHeights
-        const fromCol = img.range.from.col;
-        const fromRow = img.range.from.row;
-        const toCol = img.range.to.col;
-        const toRow = img.range.to.row;
-        
+        // Support both tl/br and from/to range formats in ExcelJS
+        const tl = img.range.tl || img.range.from;
+        const br = img.range.br || img.range.to;
+        if (!tl) return null;
+
+        const fromCol = tl.col;
+        const fromRow = tl.row;
+        const toCol = br ? br.col : fromCol + 2;
+        const toRow = br ? br.row : fromRow + 5;
+
         // Convert EMU offsets to pixels (1 pixel = 9525 EMUs)
-        const fromColOff = img.range.from.colOff ? Math.round(img.range.from.colOff / 9525) : 0;
-        const fromRowOff = img.range.from.rowOff ? Math.round(img.range.from.rowOff / 9525) : 0;
-        const toColOff = img.range.to.colOff ? Math.round(img.range.to.colOff / 9525) : 0;
-        const toRowOff = img.range.to.rowOff ? Math.round(img.range.to.rowOff / 9525) : 0;
-        
-        // Left positioning
+        const fromColOff = tl.colOff ? Math.round(tl.colOff / 9525) : 0;
+        const fromRowOff = tl.rowOff ? Math.round(tl.rowOff / 9525) : 0;
+        const toColOff = (br && br.colOff) ? Math.round(br.colOff / 9525) : 0;
+        const toRowOff = (br && br.rowOff) ? Math.round(br.rowOff / 9525) : 0;
+
+        // Left positioning (supports fractional column positions)
         let left = 0;
-        for (let i = 0; i < fromCol && i < colWidths.length; i++) {
+        const startColInt = Math.floor(fromCol);
+        const startColFrac = fromCol - startColInt;
+        for (let i = 0; i < startColInt && i < colWidths.length; i++) {
           left += colWidths[i]!;
         }
+        if (startColInt < colWidths.length) {
+          left += colWidths[startColInt]! * startColFrac;
+        }
         left += fromColOff;
-        
-        // Top positioning
+
+        // Top positioning (supports fractional row positions)
         let top = 0;
-        for (let i = 0; i < fromRow && i < rowHeights.length; i++) {
+        const startRowInt = Math.floor(fromRow);
+        const startRowFrac = fromRow - startRowInt;
+        for (let i = 0; i < startRowInt && i < rowHeights.length; i++) {
           top += rowHeights[i]!;
         }
+        if (startRowInt < rowHeights.length) {
+          top += rowHeights[startRowInt]! * startRowFrac;
+        }
         top += fromRowOff;
-        
-        // Width calculation
+
+        // Width calculation (supports fractional widths)
         let width = 0;
-        for (let i = fromCol; i <= toCol && i < colWidths.length; i++) {
-          width += colWidths[i]!;
+        const endColInt = Math.floor(toCol);
+        if (startColInt === endColInt) {
+          if (startColInt < colWidths.length) {
+            width = colWidths[startColInt]! * (toCol - fromCol);
+          }
+        } else {
+          if (startColInt < colWidths.length) {
+            width += colWidths[startColInt]! * (1 - startColFrac);
+          }
+          for (let i = startColInt + 1; i < endColInt && i < colWidths.length; i++) {
+            width += colWidths[i]!;
+          }
+          if (endColInt < colWidths.length) {
+            width += colWidths[endColInt]! * (toCol - endColInt);
+          }
         }
         width = width - fromColOff + toColOff;
-        
-        // Height calculation
+
+        // Height calculation (supports fractional heights)
         let height = 0;
-        for (let i = fromRow; i <= toRow && i < rowHeights.length; i++) {
-          height += rowHeights[i]!;
+        const endRowInt = Math.floor(toRow);
+        if (startRowInt === endRowInt) {
+          if (startRowInt < rowHeights.length) {
+            height = rowHeights[startRowInt]! * (toRow - fromRow);
+          }
+        } else {
+          if (startRowInt < rowHeights.length) {
+            height += rowHeights[startRowInt]! * (1 - startRowFrac);
+          }
+          for (let i = startRowInt + 1; i < endRowInt && i < rowHeights.length; i++) {
+            height += rowHeights[i]!;
+          }
+          if (endRowInt < rowHeights.length) {
+            height += rowHeights[endRowInt]! * (toRow - endRowInt);
+          }
         }
         height = height - fromRowOff + toRowOff;
         
@@ -524,6 +706,7 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
                           key={c}
                           className="excel-cell"
                           style={{ fontSize: `${12 + fontSizeOffset}px` }}
+                          onContextMenu={(e) => e.preventDefault()}
                         >
                           {''}
                         </td>
@@ -643,6 +826,7 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
                         onMouseLeave={() => {
                           setHoveredCell(null);
                         }}
+                        onContextMenu={(e) => handleCellContextMenu(e, r, c)}
                       >
                         {cellContent}
                       </td>
@@ -670,6 +854,34 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
         > 
           <div className="tooltip-content">{hoveredCell.text}</div>
           <div className="tooltip-arrow" />
+        </div>
+      )}
+
+      {contextMenu.visible && (
+        <div
+          id="sheet-cell-context-menu"
+          className="custom-context-menu"
+          style={{
+            left: `${contextMenu.x}px`,
+            top: `${contextMenu.y}px`,
+          }}
+        >
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => handleCopy('original')}
+          >
+            Copy bản gốc
+          </button>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => handleCopy('translated')}
+            disabled={!translatedWorksheet}
+            title={!translatedWorksheet ? 'Chưa có bản dịch' : undefined}
+          >
+            Copy bản dịch
+          </button>
         </div>
       )}
     </div>

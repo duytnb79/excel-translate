@@ -2,16 +2,17 @@ import React, { useState, useMemo, useEffect } from 'react';
 import ExcelJS from 'exceljs';
 import { 
   FileSpreadsheet, 
-  Globe, 
   FileDown, 
   Loader,
   Trash2,
-  PanelLeftClose
+  PanelLeftClose,
+  Settings
 } from 'lucide-react';
 
 // Shared Components
 import { Toast } from '../shared/components/Toast';
 import { ThemeToggle } from '../shared/components/ThemeToggle';
+import { SettingsModal } from '../shared/components/SettingsModal';
 
 // Shared Utils
 import { 
@@ -54,7 +55,7 @@ export const App: React.FC = () => {
   const [sourceLang, setSourceLang] = useState<string>('auto');
   const [targetLang, setTargetLang] = useState<string>('vi');
   const [translationMode, setTranslationMode] = useState<TranslationMode>('google');
-  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => localStorage.getItem('gemini_api_key') || '');
+  const [geminiApiKey, setGeminiApiKey] = useState<string>('');
   const [showGridlines, setShowGridlines] = useState<boolean>(true);
   
   // UI Layout States
@@ -62,6 +63,7 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'original' | 'translated'>('original');
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [fontSizeOffset, setFontSizeOffset] = useState<number>(0);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [isAllAutoFitted, setIsAllAutoFitted] = useState<boolean>(false);
   const sheetViewerRef = React.useRef<any>(null);
 
@@ -380,10 +382,7 @@ export const App: React.FC = () => {
         }
       );
 
-      // Save Gemini API key securely if successful
-      if (translationMode === 'gemini') {
-        localStorage.setItem('gemini_api_key', geminiApiKey);
-      }
+
 
       // 4. Overwrite text values and sheet names in clone workbook
       clonedWb.eachSheet((sheet) => {
@@ -535,8 +534,8 @@ export const App: React.FC = () => {
       <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-header">
           <div className="logo">
-            <Globe size={18} />
-            <span>Sheets Translate</span>
+            <FileSpreadsheet size={18} />
+            <span>Excel Translate</span>
           </div>
           <button 
             type="button"
@@ -563,12 +562,6 @@ export const App: React.FC = () => {
             setSourceLang={setSourceLang}
             targetLang={targetLang}
             setTargetLang={setTargetLang}
-            translationMode={translationMode}
-            setTranslationMode={setTranslationMode}
-            geminiApiKey={geminiApiKey}
-            setGeminiApiKey={setGeminiApiKey}
-            showGridlines={showGridlines}
-            setShowGridlines={setShowGridlines}
             onTranslate={handleTranslate}
             disabled={!origWorkbook || loading}
           />
@@ -647,6 +640,16 @@ export const App: React.FC = () => {
                 </button>
               )}
 
+              {/* Settings Button */}
+              <button 
+                type="button"
+                className="btn-icon" 
+                title="Cấu hình hệ thống" 
+                onClick={() => setShowSettingsModal(true)}
+              >
+                <Settings size={16} />
+              </button>
+
               {/* Light/Dark Toggle */}
               <ThemeToggle theme={theme} onToggle={toggleTheme} />
             </div>
@@ -682,10 +685,12 @@ export const App: React.FC = () => {
           <SheetViewer 
             ref={sheetViewerRef}
             worksheet={activeWorksheet}
-            originalWorksheet={activeTab === 'translated' ? origWorkbook?.getWorksheet(activeSheetIndex + 1) : undefined}
+            originalWorksheet={origWorkbook?.getWorksheet(activeSheetIndex + 1) || undefined}
+            translatedWorksheet={transWorkbook?.getWorksheet(activeSheetIndex + 1) || undefined}
             showGridlines={showGridlines}
             zoomLevel={zoomLevel}
             fontSizeOffset={fontSizeOffset}
+            onShowToast={showToast}
           />
         ) : (
           <div className="sheet-empty-state" style={{ flex: 1 }}>
@@ -705,6 +710,17 @@ export const App: React.FC = () => {
         />
       </main>
 
+      {/* Settings Configuration Modal */}
+      <SettingsModal 
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        translationMode={translationMode}
+        setTranslationMode={setTranslationMode}
+        geminiApiKey={geminiApiKey}
+        setGeminiApiKey={setGeminiApiKey}
+        showGridlines={showGridlines}
+        setShowGridlines={setShowGridlines}
+      />
     </div>
   );
 };

@@ -9,9 +9,9 @@
   --text-main: #0f172a;
   --text-sub: #475569;
   --text-muted: #94a3b8;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-bg: #e0e7ff;
+  --accent: #107c41;
+  --accent-hover: #0a5c2f;
+  --accent-bg: #e2f0d9;
   --success: #10b981;
   --danger: #ef4444;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1);
@@ -19,7 +19,7 @@
 
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --sidebar-width: 280px;
-  --header-height: 40px;
+  --header-height: 48px;
 }
 
 [data-theme="dark"] {
@@ -33,9 +33,9 @@
   --text-main: #f8fafc;
   --text-sub: #cbd5e1;
   --text-muted: #64748b;
-  --accent: #6366f1;
-  --accent-hover: #818cf8;
-  --accent-bg: #1e1b4b;
+  --accent: #22c55e;
+  --accent-hover: #4ade80;
+  --accent-bg: #14532d;
   --success: #34d399;
   --danger: #f87171;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
@@ -142,20 +142,20 @@ body {
 }
 
 .global-toolbar {
-  height: 38px;
-  background-color: #f0f4f9;
-  border-bottom: 1px solid #cbd5e1;
+  height: var(--header-height);
+  background-color: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 16px;
   flex-shrink: 0;
   width: 100%;
 }
 
 [data-theme="dark"] .global-toolbar {
-  background-color: #0b0f19;
-  border-bottom: 1px solid #1e293b;
+  background-color: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .global-mode-bar {
@@ -1027,14 +1027,14 @@ input:checked + .slider:before {
 }
 
 .font-size-btn {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: none;
   background-color: transparent;
   border-radius: 4px;
-  font-size: 16px;
-  font-weight: 400;
+  font-size: 14px;
+  font-weight: 500;
   color: var(--text-sub);
   cursor: pointer;
   display: flex;
@@ -1054,14 +1054,14 @@ input:checked + .slider:before {
 }
 
 .font-size-box {
-  min-width: 28px;
-  height: 20px;
+  min-width: 32px;
+  height: 28px;
   border: 1px solid #cbd5e1;
   background-color: #ffffff;
   color: var(--text-main);
   font-size: 11px;
   font-weight: 600;
-  border-radius: 3px;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1090,5 +1090,165 @@ input:checked + .slider:before {
 [data-theme="dark"] .global-toolbar .btn-icon:hover {
   background-color: rgba(255, 255, 255, 0.08);
 }
+
+/* Custom Cell Context Menu styles */
+.custom-context-menu {
+  position: fixed;
+  z-index: 10000;
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.05);
+  padding: 4px 0;
+  min-width: 160px;
+  animation: contextMenuFadeIn 0.08s ease-out;
+  backdrop-filter: blur(8px);
+}
+
+[data-theme="dark"] .custom-context-menu {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-main);
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.context-menu-item:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+  color: var(--text-main);
+}
+
+.context-menu-item:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+@keyframes contextMenuFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Settings Modal styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: modalFadeIn 0.15s ease-out;
+}
+
+.modal-container {
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  width: 440px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modalScaleIn 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.modal-header {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+.modal-title svg {
+  color: var(--accent);
+}
+
+.modal-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modal-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-sub);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.modal-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: flex-end;
+  background-color: var(--bg-app);
+}
+
+[data-theme="dark"] .modal-footer {
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modalScaleIn {
+  from { transform: scale(0.95); }
+  to { transform: scale(1); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 
 
