@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-PROJECT_ID ?= sheets-translate-c8f40
+PROJECT_ID ?= vi-translate
 FIREBASE := npx firebase --project $(PROJECT_ID)
 
 .PHONY: help install lint build deploy firebase-login
