@@ -25,6 +25,7 @@ export interface TranslationSettingsProps {
   setTargetLang: (lang: string) => void;
   onTranslate: () => void;
   disabled: boolean;
+  isTranslated?: boolean;
 }
 
 export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
@@ -34,6 +35,7 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
   setTargetLang,
   onTranslate,
   disabled,
+  isTranslated = false,
 }) => {
   return (
     <>
@@ -74,18 +76,20 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
       </div>
 
       {/* Translate Button */}
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        <button 
-          type="button"
-          className="btn btn-primary"
-          style={{ fontWeight: 600, width: '100%' }}
-          disabled={disabled}
-          onClick={onTranslate}
-        >
-          <Sparkles size={16} />
-          Dịch
-        </button>
-      </div>
+      {!isTranslated && (
+        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <button 
+            type="button"
+            className="btn btn-primary"
+            style={{ fontWeight: 600, width: '100%' }}
+            disabled={disabled}
+            onClick={onTranslate}
+          >
+            <Sparkles size={16} />
+            Dịch
+          </button>
+        </div>
+      )}
     </>
   );
 };

@@ -6,6 +6,8 @@ export interface FileUploadProps {
   fileSizeStr: string;
   onFileSelect: (file: File) => void;
   onClear: () => void;
+  onUrlImport?: (url: string) => Promise<void>;
+  importLoading?: boolean;
 }
 
 export const FileUpload: React.FC<FileUploadProps> = ({
@@ -13,8 +15,11 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   fileSizeStr,
   onFileSelect,
   onClear,
+  onUrlImport,
+  importLoading = false,
 }) => {
   const [dragOver, setDragOver] = useState(false);
+  const [url, setUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -40,6 +45,17 @@ export const FileUpload: React.FC<FileUploadProps> = ({
     }
   };
 
+  const handleUrlSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!url.trim() || !onUrlImport) return;
+    try {
+      await onUrlImport(url);
+      setUrl('');
+    } catch (err) {
+      console.error('URL import error:', err);
+    }
+  };
+
   return (
     <div className="control-group">
       <span className="section-title">Tệp bảng tính</span>
@@ -52,6 +68,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             <div className="file-info-size">{fileSizeStr}</div>
           </div>
           <button 
+            type="button"
             className="btn-icon" 
             title="Thay đổi tệp"
             onClick={onClear}
@@ -60,28 +77,50 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           </button>
         </div>
       ) : (
-        <div 
-          className={`upload-container ${dragOver ? 'drag-over' : ''}`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Upload size={24} />
-          <div>
-            <p style={{ fontWeight: 500, fontSize: '12px' }}>Nhấp hoặc Kéo thả tệp</p>
-            <p style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>
-              Hỗ trợ .xlsx, .csv
-            </p>
+        <>
+          <div 
+            className={`upload-container ${dragOver ? 'drag-over' : ''}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload size={24} />
+            <div>
+              <p style={{ fontWeight: 500, fontSize: '12px' }}>Nhấp hoặc Kéo thả tệp</p>
+              <p style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>
+                Hỗ trợ .xlsx, .csv
+              </p>
+            </div>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleInputChange} 
+              accept=".xlsx, .csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              style={{ display: 'none' }}
+            />
           </div>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleInputChange} 
-            accept=".xlsx, .csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            style={{ display: 'none' }}
-          />
-        </div>
+
+          {onUrlImport && (
+            <form onSubmit={handleUrlSubmit} className="url-import-form" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="text"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="Hoặc dán link Google Sheets..."
+                disabled={importLoading}
+                className="url-import-input"
+              />
+              <button
+                type="submit"
+                disabled={importLoading || !url.trim()}
+                className="btn btn-primary url-import-btn"
+              >
+                {importLoading ? 'Tải...' : 'Tải'}
+              </button>
+            </form>
+          )}
+        </>
       )}
     </div>
   );

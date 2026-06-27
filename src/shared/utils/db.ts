@@ -11,12 +11,14 @@ export interface ProjectMetadata {
   activeSheetIndex: number;
   activeTab: 'original' | 'translated';
   targetLang: string;
+  translatedLangs?: string[];
 }
 
 export interface ProjectBuffers {
   id: string;
   origBuffer: ArrayBuffer;
   transBuffer?: ArrayBuffer;
+  translations?: { [langCode: string]: ArrayBuffer };
 }
 
 function getDB(): Promise<IDBDatabase> {

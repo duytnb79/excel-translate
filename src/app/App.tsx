@@ -49,6 +49,7 @@ export const App: React.FC = () => {
   // Workbook data
   const [origWorkbook, setOrigWorkbook] = useState<ExcelJS.Workbook | null>(null);
   const [transWorkbook, setTransWorkbook] = useState<ExcelJS.Workbook | null>(null);
+  const [translatedLang, setTranslatedLang] = useState<string | null>(null);
   const [activeSheetIndex, setActiveSheetIndex] = useState<number>(0);
   
   // Translation Config States
@@ -89,6 +90,7 @@ export const App: React.FC = () => {
     }
   };
   const [loading, setLoading] = useState<boolean>(false);
+  const [importLoading, setImportLoading] = useState<boolean>(false);
   const [progress, setProgress] = useState<TranslationProgress | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -146,6 +148,51 @@ export const App: React.FC = () => {
     initSession();
   }, []);
 
+  // Load translation cache when targetLang changes for the active project
+  useEffect(() => {
+    const loadCachedTranslation = async () => {
+      if (!activeProjectId) return;
+      try {
+        const meta = await getProjectMetadata(activeProjectId);
+        if (!meta) return;
+        
+        const buffers = await getProjectBuffers(activeProjectId);
+        if (!buffers) return;
+
+        // Check if there is a cached translation for targetLang
+        let cachedBuffer: ArrayBuffer | undefined;
+        if (buffers.translations && buffers.translations[targetLang]) {
+          cachedBuffer = buffers.translations[targetLang];
+        } else if (meta.targetLang === targetLang && buffers.transBuffer) {
+          cachedBuffer = buffers.transBuffer;
+        }
+
+        if (cachedBuffer) {
+          setLoading(true);
+          // Yield to browser layout/paint so the loading spinner appears before the main thread is blocked
+          setTimeout(async () => {
+            try {
+              const transWb = new ExcelJS.Workbook();
+              await transWb.xlsx.load(cachedBuffer!);
+              setTransWorkbook(transWb);
+              setTranslatedLang(targetLang);
+            } catch (err) {
+              console.error('Failed to load cached translation:', err);
+            } finally {
+              setLoading(false);
+            }
+          }, 50);
+        } else {
+          setTransWorkbook(null);
+          setTranslatedLang(null);
+        }
+      } catch (err) {
+        console.error('Failed to load cached translation:', err);
+      }
+    };
+    loadCachedTranslation();
+  }, [targetLang, activeProjectId]);
+
   // Restore project buffers and parameters from history ID
   const loadHistoryProject = async (id: string) => {
     setLoading(true);
@@ -161,13 +208,22 @@ export const App: React.FC = () => {
       await origWb.xlsx.load(buffers.origBuffer);
       setOrigWorkbook(origWb);
 
-      // Restore translated workbook if it exists
-      if (buffers.transBuffer) {
+      // Restore translated workbook if it exists for the current targetLang
+      let cachedBuffer: ArrayBuffer | undefined;
+      if (buffers.translations && buffers.translations[meta.targetLang]) {
+        cachedBuffer = buffers.translations[meta.targetLang];
+      } else if (buffers.transBuffer) {
+        cachedBuffer = buffers.transBuffer;
+      }
+
+      if (cachedBuffer) {
         const transWb = new ExcelJS.Workbook();
-        await transWb.xlsx.load(buffers.transBuffer);
+        await transWb.xlsx.load(cachedBuffer);
         setTransWorkbook(transWb);
+        setTranslatedLang(meta.targetLang);
       } else {
         setTransWorkbook(null);
+        setTranslatedLang(null);
       }
 
       // Restore parameters
@@ -287,11 +343,13 @@ export const App: React.FC = () => {
         timestamp: Date.now(),
         activeSheetIndex: 0,
         activeTab: 'original' as const,
-        targetLang
+        targetLang,
+        translatedLangs: []
       };
       const newBuffers = {
         id: newId,
-        origBuffer: arrayBuffer
+        origBuffer: arrayBuffer,
+        translations: {}
       };
       
       await saveProject(newMeta, newBuffers);
@@ -301,6 +359,7 @@ export const App: React.FC = () => {
 
       setOrigWorkbook(wb);
       setTransWorkbook(null);
+      setTranslatedLang(null);
       setActiveSheetIndex(0);
       setActiveTab('original');
       setFile(selectedFile);
@@ -319,13 +378,58 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUrlImport = async (url: string) => {
+    if (!url.trim()) return;
+    
+    setLoading(true);
+    setImportLoading(true);
+    try {
+      const response = await fetch(`/api/proxy-sheet?url=${encodeURIComponent(url.trim())}`);
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Lỗi tải bảng tính (${response.statusText})`);
+      }
+      
+      const blob = await response.blob();
+      
+      let fileName = 'Google_Sheet.xlsx';
+      const matches = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (matches && matches[1]) {
+        fileName = `Google_Sheet_${matches[1].substring(0, 8)}.xlsx`;
+      }
+      
+      const importedFile = new File([blob], fileName, {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      
+      await handleFileSelect(importedFile);
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.message || 'Lỗi khi tải bảng tính từ URL.', 'error');
+    } finally {
+      setLoading(false);
+      setImportLoading(false);
+    }
+  };
+
   // Clear current spreadsheet view
-  const handleClearFile = () => {
+  const handleClearFile = async () => {
+    if (activeProjectId) {
+      try {
+        await deleteProject(activeProjectId);
+        const list = await listProjects();
+        setHistoryList(list);
+      } catch (err) {
+        console.error('Failed to delete cleared project:', err);
+      }
+    }
     setFile(null);
     setOrigWorkbook(null);
     setTransWorkbook(null);
+    setTranslatedLang(null);
     setActiveProjectId(null);
     localStorage.removeItem('active_project_id');
+    showToast('Đã xoá tệp và toàn bộ dữ liệu dịch khỏi thiết bị.');
   };
 
   // Run cell translation
@@ -424,6 +528,7 @@ export const App: React.FC = () => {
       });
 
       setTransWorkbook(clonedWb);
+      setTranslatedLang(targetLang);
       setActiveTab('translated');
 
       if (activeProjectId) {
@@ -433,17 +538,30 @@ export const App: React.FC = () => {
             const origBuffer = await origWorkbook.xlsx.writeBuffer();
             const transBuffer = await clonedWb.xlsx.writeBuffer();
             
+            // Get existing translations or initialize
+            const buffers = await getProjectBuffers(activeProjectId);
+            const translations = buffers?.translations || {};
+            translations[targetLang] = transBuffer;
+
+            // Get existing translated languages or initialize
+            const translatedLangs = meta.translatedLangs || [];
+            if (!translatedLangs.includes(targetLang)) {
+              translatedLangs.push(targetLang);
+            }
+
             const updatedMeta = {
               ...meta,
               activeTab: 'translated' as const,
               targetLang,
+              translatedLangs,
               timestamp: Date.now()
             };
             
             await saveProject(updatedMeta, {
               id: activeProjectId,
               origBuffer,
-              transBuffer
+              transBuffer,
+              translations
             });
             
             const list = await listProjects();
@@ -512,14 +630,14 @@ export const App: React.FC = () => {
               <Loader size={36} className="spinner" />
               <div style={{ textAlign: 'center' }}>
                 <p style={{ fontWeight: 600, fontSize: '14px', marginBottom: '4px' }}>Đang dịch bảng tính...</p>
-                <p style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                <p style={{ color: 'rgba(255, 255, 255, 0.7)', fontSize: '12px' }}>
                   Đã dịch {progress.current}/{progress.total} cụm từ
                 </p>
               </div>
               <div className="progress-container">
                 <div className="progress-bar" style={{ width: `${progress.percentage}%` }}></div>
               </div>
-              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{progress.percentage}%</p>
+              <p style={{ fontSize: '11px', color: 'rgba(255, 255, 255, 0.7)' }}>{progress.percentage}%</p>
             </>
           ) : (
             <>
@@ -554,6 +672,8 @@ export const App: React.FC = () => {
             fileSizeStr={fileSizeStr}
             onFileSelect={handleFileSelect}
             onClear={handleClearFile}
+            onUrlImport={handleUrlImport}
+            importLoading={importLoading}
           />
 
           {/* Translation Settings Form */}
@@ -563,7 +683,8 @@ export const App: React.FC = () => {
             targetLang={targetLang}
             setTargetLang={setTargetLang}
             onTranslate={handleTranslate}
-            disabled={!origWorkbook || loading}
+            disabled={!origWorkbook || loading || (transWorkbook !== null && targetLang === translatedLang)}
+            isTranslated={transWorkbook !== null && targetLang === translatedLang}
           />
 
           {/* Recent History List */}
