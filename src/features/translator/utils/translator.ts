@@ -179,7 +179,8 @@ export async function translateTexts(
   targetLang: string,
   mode: TranslationMode,
   apiKey?: string,
-  onProgress?: (progress: TranslationProgress) => void
+  onProgress?: (progress: TranslationProgress) => void,
+  checkCancelled?: () => boolean
 ): Promise<Map<string, string>> {
   const translationMap = new Map<string, string>();
   
@@ -195,6 +196,10 @@ export async function translateTexts(
   const batchSize = mode === 'gemini' ? 50 : 25;
   
   for (let i = 0; i < uniqueTexts.length; i += batchSize) {
+    if (checkCancelled && checkCancelled()) {
+      break; // Stop and return whatever translationMap was completed so far
+    }
+
     const batch = uniqueTexts.slice(i, i + batchSize);
     
     let translatedBatch: string[] = [];

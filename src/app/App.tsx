@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import ExcelJS from 'exceljs';
 import { 
   FileSpreadsheet, 
@@ -36,6 +36,12 @@ import { FileUpload } from '../features/translator/components/FileUpload';
 import { TranslationSettings } from '../features/translator/components/TranslationSettings';
 import { translateTexts, TranslationMode, TranslationProgress } from '../features/translator/utils/translator';
 
+// Feature: PDF Viewer & Compiler
+import { parsePdfDocument, PdfDocumentData } from '../features/pdf-viewer/utils/pdfParser';
+import { compileTranslatedPdf } from '../features/pdf-viewer/utils/pdfCompiler';
+import { PdfViewer } from '../features/pdf-viewer/components/PdfViewer';
+import { PdfToolbar } from '../features/pdf-viewer/components/PdfToolbar';
+
 // Providers
 import { useTheme } from './providers/ThemeProvider';
 
@@ -49,8 +55,20 @@ export const App: React.FC = () => {
   // Workbook data
   const [origWorkbook, setOrigWorkbook] = useState<ExcelJS.Workbook | null>(null);
   const [transWorkbook, setTransWorkbook] = useState<ExcelJS.Workbook | null>(null);
+  const [spreadsheetTranslationMap, setSpreadsheetTranslationMap] = useState<Map<string, string>>(new Map());
   const [translatedLang, setTranslatedLang] = useState<string | null>(null);
   const [activeSheetIndex, setActiveSheetIndex] = useState<number>(0);
+
+  // PDF States
+  const [pdfBuffer, setPdfBuffer] = useState<ArrayBuffer | null>(null);
+  const [pdfData, setPdfData] = useState<PdfDocumentData | null>(null);
+  const [transPdfBuffer, setTransPdfBuffer] = useState<ArrayBuffer | null>(null);
+  const [pdfTranslationMap, setPdfTranslationMap] = useState<Map<string, string> | null>(null);
+  const [pdfColorsMap, setPdfColorsMap] = useState<Map<string, { bg: string; text: string }>>(new Map());
+  const [pdfPageIndex, setPdfPageIndex] = useState<number>(0);
+  
+  // Cancellation Reference
+  const cancelTranslationRef = useRef<boolean>(false);
   
   // Translation Config States
   const [sourceLang, setSourceLang] = useState<string>('auto');
@@ -159,6 +177,8 @@ export const App: React.FC = () => {
         const buffers = await getProjectBuffers(activeProjectId);
         if (!buffers) return;
 
+        const isPdf = meta.fileName.toLowerCase().endsWith('.pdf');
+
         // Check if there is a cached translation for targetLang
         let cachedBuffer: ArrayBuffer | undefined;
         if (buffers.translations && buffers.translations[targetLang]) {
@@ -172,10 +192,15 @@ export const App: React.FC = () => {
           // Yield to browser layout/paint so the loading spinner appears before the main thread is blocked
           setTimeout(async () => {
             try {
-              const transWb = new ExcelJS.Workbook();
-              await transWb.xlsx.load(cachedBuffer!);
-              setTransWorkbook(transWb);
-              setTranslatedLang(targetLang);
+              if (isPdf) {
+                setTransPdfBuffer(cachedBuffer!);
+                setTranslatedLang(targetLang);
+              } else {
+                const transWb = new ExcelJS.Workbook();
+                await transWb.xlsx.load(cachedBuffer!);
+                setTransWorkbook(transWb);
+                setTranslatedLang(targetLang);
+              }
             } catch (err) {
               console.error('Failed to load cached translation:', err);
             } finally {
@@ -183,7 +208,11 @@ export const App: React.FC = () => {
             }
           }, 50);
         } else {
-          setTransWorkbook(null);
+          if (isPdf) {
+            setTransPdfBuffer(null);
+          } else {
+            setTransWorkbook(null);
+          }
           setTranslatedLang(null);
         }
       } catch (err) {
@@ -203,31 +232,65 @@ export const App: React.FC = () => {
       const buffers = await getProjectBuffers(id);
       if (!buffers) return;
 
-      // Restore original workbook
-      const origWb = new ExcelJS.Workbook();
-      await origWb.xlsx.load(buffers.origBuffer);
-      setOrigWorkbook(origWb);
+      const isPdf = meta.fileName.toLowerCase().endsWith('.pdf');
 
-      // Restore translated workbook if it exists for the current targetLang
-      let cachedBuffer: ArrayBuffer | undefined;
-      if (buffers.translations && buffers.translations[meta.targetLang]) {
-        cachedBuffer = buffers.translations[meta.targetLang];
-      } else if (buffers.transBuffer) {
-        cachedBuffer = buffers.transBuffer;
-      }
+      if (isPdf) {
+        setPdfBuffer(buffers.origBuffer);
+        const data = await parsePdfDocument(buffers.origBuffer);
+        setPdfData(data);
 
-      if (cachedBuffer) {
-        const transWb = new ExcelJS.Workbook();
-        await transWb.xlsx.load(cachedBuffer);
-        setTransWorkbook(transWb);
-        setTranslatedLang(meta.targetLang);
-      } else {
+        // Restore translated PDF buffer if it exists for the current targetLang
+        let cachedBuffer: ArrayBuffer | undefined;
+        if (buffers.translations && buffers.translations[meta.targetLang]) {
+          cachedBuffer = buffers.translations[meta.targetLang];
+        } else if (buffers.transBuffer) {
+          cachedBuffer = buffers.transBuffer;
+        }
+
+        if (cachedBuffer) {
+          setTransPdfBuffer(cachedBuffer);
+          setTranslatedLang(meta.targetLang);
+        } else {
+          setTransPdfBuffer(null);
+          setTranslatedLang(null);
+        }
+
+        setOrigWorkbook(null);
         setTransWorkbook(null);
-        setTranslatedLang(null);
+        setPdfTranslationMap(null);
+      } else {
+        // Restore original workbook
+        const origWb = new ExcelJS.Workbook();
+        await origWb.xlsx.load(buffers.origBuffer);
+        setOrigWorkbook(origWb);
+
+        // Restore translated workbook if it exists for the current targetLang
+        let cachedBuffer: ArrayBuffer | undefined;
+        if (buffers.translations && buffers.translations[meta.targetLang]) {
+          cachedBuffer = buffers.translations[meta.targetLang];
+        } else if (buffers.transBuffer) {
+          cachedBuffer = buffers.transBuffer;
+        }
+
+        if (cachedBuffer) {
+          const transWb = new ExcelJS.Workbook();
+          await transWb.xlsx.load(cachedBuffer);
+          setTransWorkbook(transWb);
+          setTranslatedLang(meta.targetLang);
+        } else {
+          setTransWorkbook(null);
+          setTranslatedLang(null);
+        }
+
+        setPdfBuffer(null);
+        setPdfData(null);
+        setTransPdfBuffer(null);
+        setPdfTranslationMap(null);
       }
 
       // Restore parameters
       setActiveSheetIndex(meta.activeSheetIndex);
+      setPdfPageIndex(0);
       setActiveTab(meta.activeTab);
       setTargetLang(meta.targetLang);
       setFileSizeStr(meta.fileSizeStr);
@@ -235,7 +298,7 @@ export const App: React.FC = () => {
       localStorage.setItem('active_project_id', id);
 
       const mockFile = new File([buffers.origBuffer], meta.fileName, {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        type: isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
       setFile(mockFile);
     } catch (err) {
@@ -267,6 +330,10 @@ export const App: React.FC = () => {
           setFile(null);
           setOrigWorkbook(null);
           setTransWorkbook(null);
+          setPdfBuffer(null);
+          setPdfData(null);
+          setTransPdfBuffer(null);
+          setPdfTranslationMap(null);
           setActiveProjectId(null);
           localStorage.removeItem('active_project_id');
         }
@@ -321,18 +388,13 @@ export const App: React.FC = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // Process selected spreadsheet file
+  // Process selected spreadsheet or PDF file
   const handleFileSelect = async (selectedFile: File) => {
     setLoading(true);
     setProgress(null);
     try {
       const arrayBuffer = await selectedFile.arrayBuffer();
-      const wb = new ExcelJS.Workbook();
-      await wb.xlsx.load(arrayBuffer);
-
-      if (wb.worksheets.length === 0) {
-        throw new Error('Tệp excel không chứa worksheet nào.');
-      }
+      const isPdf = selectedFile.name.toLowerCase().endsWith('.pdf');
 
       // Save new project to database
       const newId = `proj_${Date.now()}`;
@@ -352,13 +414,42 @@ export const App: React.FC = () => {
         translations: {}
       };
       
+      if (isPdf) {
+        const data = await parsePdfDocument(arrayBuffer);
+        setPdfData(data);
+        setPdfBuffer(arrayBuffer);
+        setTransPdfBuffer(null);
+        setPdfTranslationMap(null);
+        setPdfColorsMap(new Map());
+        setPdfPageIndex(0);
+        setOrigWorkbook(null);
+        setTransWorkbook(null);
+        setSpreadsheetTranslationMap(new Map());
+      } else {
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(arrayBuffer);
+
+        if (wb.worksheets.length === 0) {
+          throw new Error('Tệp excel không chứa worksheet nào.');
+        }
+
+        setOrigWorkbook(wb);
+        setTransWorkbook(null);
+        setSpreadsheetTranslationMap(new Map());
+        setTranslatedLang(null);
+        setPdfBuffer(null);
+        setPdfData(null);
+        setTransPdfBuffer(null);
+        setPdfTranslationMap(null);
+        setPdfColorsMap(new Map());
+        setPdfPageIndex(0);
+      }
+
       await saveProject(newMeta, newBuffers);
       
       const list = await listProjects();
       setHistoryList(list);
 
-      setOrigWorkbook(wb);
-      setTransWorkbook(null);
       setTranslatedLang(null);
       setActiveSheetIndex(0);
       setActiveTab('original');
@@ -367,12 +458,13 @@ export const App: React.FC = () => {
       setActiveProjectId(newId);
       localStorage.setItem('active_project_id', newId);
 
-      showToast('Đã tải tệp bảng tính thành công!');
+      showToast(`Đã tải tệp ${isPdf ? 'PDF' : 'bảng tính'} thành công!`);
     } catch (err: any) {
       console.error(err);
-      showToast(err.message || 'Lỗi khi đọc tệp Excel. Hãy kiểm tra định dạng.', 'error');
+      showToast(err.message || 'Lỗi khi đọc tệp. Hãy kiểm tra định dạng.', 'error');
       setFile(null);
       setOrigWorkbook(null);
+      setPdfBuffer(null);
     } finally {
       setLoading(false);
     }
@@ -412,7 +504,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // Clear current spreadsheet view
+  // Clear current document view
   const handleClearFile = async () => {
     if (activeProjectId) {
       try {
@@ -426,15 +518,22 @@ export const App: React.FC = () => {
     setFile(null);
     setOrigWorkbook(null);
     setTransWorkbook(null);
+    setSpreadsheetTranslationMap(new Map());
+    setPdfBuffer(null);
+    setPdfData(null);
+    setTransPdfBuffer(null);
+    setPdfTranslationMap(null);
+    setPdfColorsMap(new Map());
+    setPdfPageIndex(0);
     setTranslatedLang(null);
     setActiveProjectId(null);
     localStorage.removeItem('active_project_id');
     showToast('Đã xoá tệp và toàn bộ dữ liệu dịch khỏi thiết bị.');
   };
 
-  // Run cell translation
+  // Run document translation
   const handleTranslate = async () => {
-    if (!origWorkbook || !file) return;
+    if ((!origWorkbook && !pdfBuffer) || !file) return;
 
     if (translationMode === 'gemini' && !geminiApiKey.trim()) {
       showToast('Vui lòng điền Gemini API Key để dịch bằng AI.', 'error');
@@ -442,137 +541,277 @@ export const App: React.FC = () => {
     }
 
     setLoading(true);
+    cancelTranslationRef.current = false;
     setProgress({ current: 0, total: 100, percentage: 0 });
 
     try {
-      // 1. Double buffer clone (buffer write/read) to preserve formatting details
-      const originalBuffer = await origWorkbook.xlsx.writeBuffer();
-      const clonedWb = new ExcelJS.Workbook();
-      await clonedWb.xlsx.load(originalBuffer);
+      const isPdf = file.name.toLowerCase().endsWith('.pdf');
 
-      // 2. Fetch cell unique text collections and sheet names
-      const textsToTranslate: string[] = [];
-      clonedWb.eachSheet((sheet) => {
-        if (needsTranslation(sheet.name)) {
-          textsToTranslate.push(sheet.name);
+      if (isPdf) {
+        if (!pdfBuffer || !pdfData) {
+          throw new Error('Dữ liệu PDF chưa được nạp đầy đủ.');
         }
-        sheet.eachRow((row) => {
-          row.eachCell((cell) => {
-            const txt = getCellText(cell);
-            if (needsTranslation(txt)) {
-              textsToTranslate.push(txt);
+
+        // Pre-populate with existing translations to resume
+        const newPdfTranslationMap = new Map<string, string>(pdfTranslationMap || new Map());
+
+        // 1. Gather all text elements that need translation
+        const textsToTranslate: string[] = [];
+        pdfData.pages.forEach((page) => {
+          page.items.forEach((item) => {
+            if (needsTranslation(item.str) && !newPdfTranslationMap.has(item.str)) {
+              textsToTranslate.push(item.str);
             }
           });
         });
-      });
 
-      if (textsToTranslate.length === 0) {
-        setTransWorkbook(clonedWb);
+        if (textsToTranslate.length === 0) {
+          setTransPdfBuffer(pdfBuffer);
+          setActiveTab('translated');
+          showToast('Tài liệu PDF không chứa nội dung chữ cần dịch.');
+          setLoading(false);
+          return;
+        }
+
+        // 2. Execute translation engine
+        const translationMap = await translateTexts(
+          textsToTranslate,
+          sourceLang,
+          targetLang,
+          translationMode,
+          geminiApiKey,
+          (progressInfo) => {
+            setProgress(progressInfo);
+          },
+          () => cancelTranslationRef.current
+        );
+
+        // Merge translation results
+        translationMap.forEach((val, key) => {
+          newPdfTranslationMap.set(key, val);
+        });
+
+        const isCancelled = cancelTranslationRef.current;
+
+        // Check translation rate
+        let translatedCount = 0;
+        translationMap.forEach((val, key) => {
+          if (val !== key) {
+            translatedCount++;
+          }
+        });
+
+        if (!isCancelled && textsToTranslate.length > 0 && translatedCount === 0 && sourceLang !== targetLang) {
+          showToast('Lỗi dịch: Google Dịch đã chặn (Rate Limit) do tài liệu quá lớn. Hãy chuyển sang dùng Gemini API trong phần cấu hình!', 'error');
+          setLoading(false);
+          return;
+        }
+
+        setPdfTranslationMap(newPdfTranslationMap);
+
+        // 3. Compile translated PDF using pdf-lib on-the-fly and save it
+        const compiledPdf = await compileTranslatedPdf(pdfBuffer, pdfData, newPdfTranslationMap, pdfColorsMap);
+        setTransPdfBuffer(compiledPdf);
+        setTranslatedLang(targetLang);
         setActiveTab('translated');
-        showToast('Bảng tính không chứa nội dung chữ cần dịch.');
-        setLoading(false);
-        return;
-      }
 
-      // 3. Execute translation engine
-      const translationMap = await translateTexts(
-        textsToTranslate,
-        sourceLang,
-        targetLang,
-        translationMode,
-        geminiApiKey,
-        (progressInfo) => {
-          setProgress(progressInfo);
-        }
-      );
+        if (activeProjectId) {
+          try {
+            const meta = await getProjectMetadata(activeProjectId);
+            if (meta) {
+              const buffers = await getProjectBuffers(activeProjectId);
+              const translations = buffers?.translations || {};
+              translations[targetLang] = compiledPdf;
 
-
-
-      // 4. Overwrite text values and sheet names in clone workbook
-      clonedWb.eachSheet((sheet) => {
-        if (translationMap.has(sheet.name)) {
-          const translatedName = translationMap.get(sheet.name);
-          if (translatedName) {
-            let sanitized = translatedName.replace(/[\\\/?:*\[\]]/g, '').trim();
-            if (sanitized.length > 31) {
-              sanitized = sanitized.slice(0, 31);
-            }
-            if (sanitized && sanitized !== sheet.name) {
-              let uniqueName = sanitized;
-              let counter = 1;
-              while (clonedWb.worksheets.some(w => w.name.toLowerCase() === uniqueName.toLowerCase() && w !== sheet)) {
-                const suffix = ` (${counter})`;
-                const availableLen = 31 - suffix.length;
-                uniqueName = sanitized.slice(0, availableLen) + suffix;
-                counter++;
+              const translatedLangs = meta.translatedLangs || [];
+              if (!translatedLangs.includes(targetLang)) {
+                translatedLangs.push(targetLang);
               }
-              try {
-                sheet.name = uniqueName;
-              } catch (e) {
-                console.warn('Failed to rename sheet:', e);
-              }
+
+              const updatedMeta = {
+                ...meta,
+                activeTab: 'translated' as const,
+                targetLang,
+                translatedLangs,
+                timestamp: Date.now()
+              };
+
+              await saveProject(updatedMeta, {
+                id: activeProjectId,
+                origBuffer: buffers!.origBuffer,
+                transBuffer: compiledPdf,
+                translations
+              });
+
+              const list = await listProjects();
+              setHistoryList(list);
             }
+          } catch (dbErr) {
+            console.error('Failed to update PDF project in database:', dbErr);
           }
         }
-        sheet.eachRow((row) => {
-          row.eachCell((cell) => {
-            const txt = getCellText(cell);
-            if (translationMap.has(txt)) {
-              const translatedVal = translationMap.get(txt);
-              if (translatedVal) {
-                setCellText(cell, translatedVal);
+
+        if (isCancelled) {
+          showToast('Đã dừng dịch. Đã lưu và hiển thị bản dịch một phần.');
+        } else {
+          showToast('Dịch tệp PDF thành công!');
+        }
+      } else {
+        // Excel File Translation Flow
+        const clonedWb = new ExcelJS.Workbook();
+        const originalBuffer = await origWorkbook!.xlsx.writeBuffer();
+        await clonedWb.xlsx.load(originalBuffer);
+
+        // Pre-populate with existing translations to resume
+        const newSpreadsheetTranslationMap = new Map<string, string>(spreadsheetTranslationMap || new Map());
+
+        // 2. Fetch cell unique text collections and sheet names
+        const textsToTranslate: string[] = [];
+        clonedWb.eachSheet((sheet) => {
+          if (needsTranslation(sheet.name) && !newSpreadsheetTranslationMap.has(sheet.name)) {
+            textsToTranslate.push(sheet.name);
+          }
+          sheet.eachRow((row) => {
+            row.eachCell((cell) => {
+              const txt = getCellText(cell);
+              if (needsTranslation(txt) && !newSpreadsheetTranslationMap.has(txt)) {
+                textsToTranslate.push(txt);
               }
-            }
+            });
           });
         });
-      });
 
-      setTransWorkbook(clonedWb);
-      setTranslatedLang(targetLang);
-      setActiveTab('translated');
+        if (textsToTranslate.length === 0) {
+          setTransWorkbook(clonedWb);
+          setActiveTab('translated');
+          showToast('Bảng tính không chứa nội dung chữ cần dịch.');
+          setLoading(false);
+          return;
+        }
 
-      if (activeProjectId) {
-        try {
-          const meta = await getProjectMetadata(activeProjectId);
-          if (meta) {
-            const origBuffer = await origWorkbook.xlsx.writeBuffer();
-            const transBuffer = await clonedWb.xlsx.writeBuffer();
-            
-            // Get existing translations or initialize
-            const buffers = await getProjectBuffers(activeProjectId);
-            const translations = buffers?.translations || {};
-            translations[targetLang] = transBuffer;
+        // 3. Execute translation engine
+        const translationMap = await translateTexts(
+          textsToTranslate,
+          sourceLang,
+          targetLang,
+          translationMode,
+          geminiApiKey,
+          (progressInfo) => {
+            setProgress(progressInfo);
+          },
+          () => cancelTranslationRef.current
+        );
 
-            // Get existing translated languages or initialize
-            const translatedLangs = meta.translatedLangs || [];
-            if (!translatedLangs.includes(targetLang)) {
-              translatedLangs.push(targetLang);
-            }
+        // Merge translation results
+        translationMap.forEach((val, key) => {
+          newSpreadsheetTranslationMap.set(key, val);
+        });
+        setSpreadsheetTranslationMap(newSpreadsheetTranslationMap);
 
-            const updatedMeta = {
-              ...meta,
-              activeTab: 'translated' as const,
-              targetLang,
-              translatedLangs,
-              timestamp: Date.now()
-            };
-            
-            await saveProject(updatedMeta, {
-              id: activeProjectId,
-              origBuffer,
-              transBuffer,
-              translations
-            });
-            
-            const list = await listProjects();
-            setHistoryList(list);
+        const isCancelled = cancelTranslationRef.current;
+
+        // Check translation rate
+        let translatedCount = 0;
+        translationMap.forEach((val, key) => {
+          if (val !== key) {
+            translatedCount++;
           }
-        } catch (dbErr) {
-          console.error('Failed to update project with translation in database:', dbErr);
+        });
+
+        if (!isCancelled && textsToTranslate.length > 0 && translatedCount === 0 && sourceLang !== targetLang) {
+          showToast('Lỗi dịch: Google Dịch đã chặn (Rate Limit) do tài liệu quá lớn. Hãy chuyển sang dùng Gemini API trong phần cấu hình!', 'error');
+          setLoading(false);
+          return;
+        }
+
+        // 4. Overwrite text values and sheet names in clone workbook
+        clonedWb.eachSheet((sheet) => {
+          if (newSpreadsheetTranslationMap.has(sheet.name)) {
+            const translatedName = newSpreadsheetTranslationMap.get(sheet.name);
+            if (translatedName) {
+              let sanitized = translatedName.replace(/[\\\/?:*\[\]]/g, '').trim();
+              if (sanitized.length > 31) {
+                sanitized = sanitized.slice(0, 31);
+              }
+              if (sanitized && sanitized !== sheet.name) {
+                let uniqueName = sanitized;
+                let counter = 1;
+                while (clonedWb.worksheets.some(w => w.name.toLowerCase() === uniqueName.toLowerCase() && w !== sheet)) {
+                  const suffix = ` (${counter})`;
+                  const availableLen = 31 - suffix.length;
+                  uniqueName = sanitized.slice(0, availableLen) + suffix;
+                  counter++;
+                }
+                try {
+                  sheet.name = uniqueName;
+                } catch (e) {
+                  console.warn('Failed to rename sheet:', e);
+                }
+              }
+            }
+          }
+          sheet.eachRow((row) => {
+            row.eachCell((cell) => {
+              const txt = getCellText(cell);
+              if (txt && newSpreadsheetTranslationMap.has(txt)) {
+                const translatedVal = newSpreadsheetTranslationMap.get(txt);
+                if (translatedVal) {
+                  setCellText(cell, translatedVal);
+                }
+              }
+            });
+          });
+        });
+
+        setTransWorkbook(clonedWb);
+        setTranslatedLang(targetLang);
+        setActiveTab('translated');
+
+        if (activeProjectId) {
+          try {
+            const meta = await getProjectMetadata(activeProjectId);
+            if (meta) {
+              const origBuffer = await origWorkbook!.xlsx.writeBuffer();
+              const transBuffer = await clonedWb.xlsx.writeBuffer();
+              
+              const buffers = await getProjectBuffers(activeProjectId);
+              const translations = buffers?.translations || {};
+              translations[targetLang] = transBuffer;
+
+              const translatedLangs = meta.translatedLangs || [];
+              if (!translatedLangs.includes(targetLang)) {
+                translatedLangs.push(targetLang);
+              }
+
+              const updatedMeta = {
+                ...meta,
+                activeTab: 'translated' as const,
+                targetLang,
+                translatedLangs,
+                timestamp: Date.now()
+              };
+              
+              await saveProject(updatedMeta, {
+                id: activeProjectId,
+                origBuffer,
+                transBuffer,
+                translations
+              });
+              
+              const list = await listProjects();
+              setHistoryList(list);
+            }
+          } catch (dbErr) {
+            console.error('Failed to update project with translation in database:', dbErr);
+          }
+        }
+
+        if (isCancelled) {
+          showToast('Đã dừng dịch. Đã lưu và hiển thị bản dịch một phần.');
+        } else {
+          showToast('Dịch bảng tính thành công!');
         }
       }
-
-      showToast('Dịch bảng tính thành công!');
     } catch (err: any) {
       console.error(err);
       showToast(err.message || 'Có lỗi xảy ra trong quá trình dịch.', 'error');
@@ -582,27 +821,53 @@ export const App: React.FC = () => {
     }
   };
 
+  const handlePdfColorsDetected = (colors: Map<string, { bg: string; text: string }>) => {
+    setPdfColorsMap(prev => {
+      const next = new Map(prev);
+      colors.forEach((val, key) => {
+        next.set(key, val);
+      });
+      return next;
+    });
+  };
+
   // Download translated file
   const handleDownload = async () => {
-    if (!transWorkbook || !file) return;
+    if ((!transWorkbook && !transPdfBuffer) || !file) return;
 
     try {
-      const buffer = await transWorkbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const isPdf = file.name.toLowerCase().endsWith('.pdf');
+      
+      let buffer: ArrayBuffer;
+      let mimeType: string;
+      let suffix: string;
+
+      if (isPdf) {
+        buffer = transPdfBuffer!;
+        mimeType = 'application/pdf';
+        suffix = `_translated_${targetLang}.pdf`;
+      } else {
+        buffer = await transWorkbook!.xlsx.writeBuffer();
+        mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        const dotIndex = file.name.lastIndexOf('.');
+        const ext = dotIndex > -1 ? file.name.slice(dotIndex) : '.xlsx';
+        suffix = `_translated_${targetLang}${ext}`;
+      }
+
+      const blob = new Blob([buffer], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       
       const dotIndex = file.name.lastIndexOf('.');
       const name = dotIndex > -1 ? file.name.slice(0, dotIndex) : file.name;
-      const ext = dotIndex > -1 ? file.name.slice(dotIndex) : '.xlsx';
       
       a.href = url;
-      a.download = `${name}_translated_${targetLang}${ext}`;
+      a.download = `${name}${suffix}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showToast('Đã tải xuống bảng dịch thành công!');
+      showToast('Đã tải xuống bản dịch thành công!');
     } catch (err) {
       console.error(err);
       showToast('Lỗi khi chuẩn bị tệp tải xuống.', 'error');
@@ -629,15 +894,40 @@ export const App: React.FC = () => {
             <>
               <Loader size={36} className="spinner" />
               <div style={{ textAlign: 'center' }}>
-                <p style={{ fontWeight: 600, fontSize: '14px', marginBottom: '4px' }}>Đang dịch bảng tính...</p>
+                <p style={{ fontWeight: 600, fontSize: '14px', marginBottom: '4px' }}>
+                  {pdfBuffer ? 'Đang dịch tài liệu PDF...' : 'Đang dịch bảng tính...'}
+                </p>
                 <p style={{ color: 'rgba(255, 255, 255, 0.7)', fontSize: '12px' }}>
-                  Đã dịch {progress.current}/{progress.total} cụm từ
+                  {pdfBuffer 
+                    ? `Đã dịch ${progress.current}/${progress.total} dòng chữ` 
+                    : `Đã dịch ${progress.current}/${progress.total} cụm từ`}
                 </p>
               </div>
               <div className="progress-container">
                 <div className="progress-bar" style={{ width: `${progress.percentage}%` }}></div>
               </div>
-              <p style={{ fontSize: '11px', color: 'rgba(255, 255, 255, 0.7)' }}>{progress.percentage}%</p>
+              <p style={{ fontSize: '11px', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '16px' }}>{progress.percentage}%</p>
+              
+              {/* Stop Button */}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  color: '#fff',
+                  border: '1px solid rgba(255, 255, 255, 0.25)',
+                  fontSize: '12px',
+                  padding: '6px 16px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontWeight: 500
+                }}
+                onClick={() => {
+                  cancelTranslationRef.current = true;
+                }}
+              >
+                Dừng Dịch
+              </button>
             </>
           ) : (
             <>
@@ -683,8 +973,14 @@ export const App: React.FC = () => {
             targetLang={targetLang}
             setTargetLang={setTargetLang}
             onTranslate={handleTranslate}
-            disabled={!origWorkbook || loading || (transWorkbook !== null && targetLang === translatedLang)}
-            isTranslated={transWorkbook !== null && targetLang === translatedLang}
+            disabled={
+              !(origWorkbook || pdfBuffer) || 
+              loading || 
+              ((pdfBuffer ? transPdfBuffer !== null : transWorkbook !== null) && targetLang === translatedLang)
+            }
+            isTranslated={
+              (pdfBuffer ? transPdfBuffer !== null : transWorkbook !== null) && targetLang === translatedLang
+            }
           />
 
           {/* Recent History List */}
@@ -734,22 +1030,31 @@ export const App: React.FC = () => {
       {/* Main Panel Viewport (Right side of sidebar) */}
       <main className="main-panel">
         {/* Row 1: Global Toolbar inside main panel */}
-        {origWorkbook && (
+        {(origWorkbook || pdfBuffer) && (
           <div className="global-toolbar">
-            <SheetToolbar 
-              sidebarCollapsed={sidebarCollapsed}
-              setSidebarCollapsed={setSidebarCollapsed}
-              hasWorkbook={!!origWorkbook}
-              zoomLevel={zoomLevel}
-              onZoomChange={setZoomLevel}
-              isAllAutoFitted={isAllAutoFitted}
-              onToggleAutoFitAll={handleToggleAutoFitAll}
-              fontSizeOffset={fontSizeOffset}
-              onFontSizeOffsetChange={setFontSizeOffset}
-            />
+            {pdfBuffer ? (
+              <PdfToolbar 
+                sidebarCollapsed={sidebarCollapsed}
+                setSidebarCollapsed={setSidebarCollapsed}
+                zoomLevel={zoomLevel}
+                onZoomChange={setZoomLevel}
+              />
+            ) : (
+              <SheetToolbar 
+                sidebarCollapsed={sidebarCollapsed}
+                setSidebarCollapsed={setSidebarCollapsed}
+                hasWorkbook={!!origWorkbook}
+                zoomLevel={zoomLevel}
+                onZoomChange={setZoomLevel}
+                isAllAutoFitted={isAllAutoFitted}
+                onToggleAutoFitAll={handleToggleAutoFitAll}
+                fontSizeOffset={fontSizeOffset}
+                onFontSizeOffsetChange={setFontSizeOffset}
+              />
+            )}
             <div className="top-bar-right">
               {/* Download Button */}
-              {transWorkbook && activeTab === 'translated' && (
+              {((transWorkbook && !pdfBuffer) || (transPdfBuffer && pdfBuffer)) && activeTab === 'translated' && (
                 <button 
                   type="button"
                   className="btn btn-secondary" 
@@ -757,7 +1062,7 @@ export const App: React.FC = () => {
                   onClick={handleDownload}
                 >
                   <FileDown size={14} />
-                  Tải Bảng Dịch
+                  Tải Bản Dịch
                 </button>
               )}
 
@@ -778,7 +1083,7 @@ export const App: React.FC = () => {
         )}
 
         {/* Row 2: Mode Tab Bar inside main panel */}
-        {origWorkbook && (
+        {(origWorkbook || pdfBuffer) && (
           <div className="global-mode-bar">
             <div className="tabs-container">
               <button 
@@ -791,9 +1096,9 @@ export const App: React.FC = () => {
               <button 
                 type="button"
                 className={`tab-btn ${activeTab === 'translated' ? 'active' : ''}`}
-                disabled={!transWorkbook}
+                disabled={pdfBuffer ? !transPdfBuffer : !transWorkbook}
                 onClick={() => handleViewChange('translated', activeSheetIndex)}
-                title={!transWorkbook ? 'Vui lòng nhấn "Dịch Ngay" trước' : ''}
+                title={!(pdfBuffer ? transPdfBuffer : transWorkbook) ? 'Vui lòng nhấn "Dịch Ngay" trước' : ''}
               >
                 Sau khi dịch
               </button>
@@ -801,8 +1106,20 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Spreadsheet rendering workspace */}
-        {activeWorksheet ? (
+        {/* Document Rendering Workspace */}
+        {pdfBuffer ? (
+          <PdfViewer
+            pdfBuffer={activeTab === 'original' ? pdfBuffer : (transPdfBuffer || pdfBuffer)}
+            pdfData={pdfData}
+            activeTab={activeTab}
+            translationMap={pdfTranslationMap}
+            zoomLevel={zoomLevel}
+            onZoomChange={setZoomLevel}
+            onColorsDetected={handlePdfColorsDetected}
+            currentPageIndex={pdfPageIndex}
+            onPageChange={setPdfPageIndex}
+          />
+        ) : activeWorksheet ? (
           <SheetViewer 
             ref={sheetViewerRef}
             worksheet={activeWorksheet}
@@ -816,19 +1133,21 @@ export const App: React.FC = () => {
         ) : (
           <div className="sheet-empty-state" style={{ flex: 1 }}>
             <FileSpreadsheet size={48} strokeWidth={1.5} />
-            <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-main)' }}>Chưa tải bảng tính</h2>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-main)' }}>Chưa tải tài liệu</h2>
             <p style={{ maxWidth: '280px', fontSize: '12px' }}>
-              Hãy kéo thả hoặc tải lên một tệp Excel để dịch và duyệt dữ liệu.
+              Hãy kéo thả hoặc tải lên một tệp Excel hoặc PDF để dịch và duyệt dữ liệu.
             </p>
           </div>
         )}
 
-        {/* Worksheet selector tabs */}
-        <SheetSelector 
-          sheetNames={sheetNames}
-          activeIndex={activeSheetIndex}
-          onSelect={(index) => handleViewChange(activeTab, index)}
-        />
+        {/* Worksheet selector tabs (Only for Excel) */}
+        {!pdfBuffer && sheetNames.length > 0 && (
+          <SheetSelector 
+            sheetNames={sheetNames}
+            activeIndex={activeSheetIndex}
+            onSelect={(index) => handleViewChange(activeTab, index)}
+          />
+        )}
       </main>
 
       {/* Settings Configuration Modal */}

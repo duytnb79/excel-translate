@@ -89,14 +89,14 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             <div>
               <p style={{ fontWeight: 500, fontSize: '12px' }}>Nhấp hoặc Kéo thả tệp</p>
               <p style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>
-                Hỗ trợ .xlsx, .csv
+                Hỗ trợ .xlsx, .csv, .pdf
               </p>
             </div>
             <input 
               type="file" 
               ref={fileInputRef} 
               onChange={handleInputChange} 
-              accept=".xlsx, .csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".xlsx, .csv, .pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/pdf"
               style={{ display: 'none' }}
             />
           </div>
