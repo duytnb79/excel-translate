@@ -1,5 +1,5 @@
 import React from 'react';
-import { Maximize2, RefreshCw, PanelLeftOpen } from 'lucide-react';
+import { Maximize2, RefreshCw, PanelLeftOpen, ZoomIn, ZoomOut } from 'lucide-react';
 
 export interface SheetToolbarProps {
   sidebarCollapsed: boolean;
@@ -41,21 +41,47 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
       
       {hasWorkbook && (
         <>
-          {/* Zoom Selector */}
-          <select 
-            className="zoom-select" 
-            value={zoomLevel}
-            onChange={(e) => onZoomChange(parseFloat(e.target.value))}
-            title="Tỷ lệ thu phóng"
-          >
-            <option value="0.5">50%</option>
-            <option value="0.75">75%</option>
-            <option value="0.9">90%</option>
-            <option value="1">100%</option>
-            <option value="1.25">125%</option>
-            <option value="1.5">150%</option>
-            <option value="2">200%</option>
-          </select>
+          {/* Zoom Control Group */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', backgroundColor: 'var(--bg-hover)', borderRadius: '4px', padding: '1px 3px' }}>
+            <button
+              type="button"
+              className="toolbar-btn"
+              onClick={() => onZoomChange(Math.max(0.5, parseFloat((zoomLevel - 0.1).toFixed(2))))}
+              title="Thu nhỏ (-10%)"
+              style={{ width: '24px', height: '24px', padding: 0 }}
+            >
+              <ZoomOut size={14} />
+            </button>
+            
+            <select 
+              className="zoom-select" 
+              value={zoomLevel}
+              onChange={(e) => onZoomChange(parseFloat(e.target.value))}
+              title="Tỷ lệ thu phóng"
+              style={{ paddingRight: '16px', backgroundPosition: 'right 2px center' }}
+            >
+              <option value="0.5">50%</option>
+              <option value="0.75">75%</option>
+              <option value="0.9">90%</option>
+              <option value="1">100%</option>
+              <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
+              <option value="2">200%</option>
+              {![0.5, 0.75, 0.9, 1.0, 1.25, 1.5, 2.0].includes(zoomLevel) && (
+                <option value={zoomLevel}>{Math.round(zoomLevel * 100)}%</option>
+              )}
+            </select>
+
+            <button
+              type="button"
+              className="toolbar-btn"
+              onClick={() => onZoomChange(Math.min(2.0, parseFloat((zoomLevel + 0.1).toFixed(2))))}
+              title="Phóng to (+10%)"
+              style={{ width: '24px', height: '24px', padding: 0 }}
+            >
+              <ZoomIn size={14} />
+            </button>
+          </div>
 
           <div className="toolbar-divider" />
 

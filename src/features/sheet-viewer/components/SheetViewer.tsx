@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useImperativeHandle, forwardRef } from 'react';
+import React, { useMemo, useState, useEffect, useImperativeHandle, forwardRef, useRef } from 'react';
 import { EyeOff } from 'lucide-react';
 import { argbToHex, mapAlignment, getCellText } from '../utils/excelParser';
 
@@ -10,6 +10,7 @@ export interface SheetViewerProps {
   zoomLevel: number;
   fontSizeOffset?: number;
   onShowToast?: (message: string, type?: 'success' | 'error') => void;
+  onZoomChange?: (zoom: number) => void;
 }
 
 export interface SheetViewerRef {
@@ -24,7 +25,8 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
   showGridlines, 
   zoomLevel,
   fontSizeOffset = 0,
-  onShowToast
+  onShowToast,
+  onZoomChange
 }, ref) => {
   // Tooltip hover state
   const [hoveredCell, setHoveredCell] = useState<{
@@ -46,6 +48,30 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
     row: 0,
     col: 0
   });
+
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Implement Trackpad Pinch-to-zoom & Ctrl+Scroll zoom for Sheet
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !onZoomChange) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault(); // Stop default browser zoom
+        
+        const zoomFactor = 0.05;
+        const direction = e.deltaY < 0 ? 1 : -1;
+        const newZoom = Math.min(Math.max(0.5, zoomLevel + direction * zoomFactor), 2.0);
+        onZoomChange(parseFloat(newZoom.toFixed(2)));
+      }
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+    };
+  }, [zoomLevel, onZoomChange]);
 
   // Handle cell context menu (right click)
   const handleCellContextMenu = (e: React.MouseEvent, r: number, c: number) => {
@@ -552,7 +578,7 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
   }
 
   return (
-    <div className="sheet-container">
+    <div className="sheet-container" ref={containerRef}>
       {/* Outer bounding wrapper with scaled width/height to support custom viewport scrolling */}
       <div 
         style={{ 

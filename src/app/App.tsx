@@ -6,7 +6,8 @@ import {
   Loader,
   Trash2,
   PanelLeftClose,
-  Settings
+  Settings,
+  Upload
 } from 'lucide-react';
 
 // Shared Components
@@ -80,7 +81,7 @@ export const App: React.FC = () => {
   // UI Layout States
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'original' | 'translated'>('original');
-  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
+  const [zoomLevel, setZoomLevel] = useState<number>(0.75);
   const [fontSizeOffset, setFontSizeOffset] = useState<number>(0);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [isAllAutoFitted, setIsAllAutoFitted] = useState<boolean>(false);
@@ -115,6 +116,60 @@ export const App: React.FC = () => {
   // History States
   const [historyList, setHistoryList] = useState<ProjectMetadata[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+
+  // Global Drag & Drop State
+  const [isDragActive, setIsDragActive] = useState(false);
+  const dragCounter = useRef(0);
+
+  useEffect(() => {
+    const handleDragEnter = (e: DragEvent) => {
+      if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        dragCounter.current++;
+        setIsDragActive(true);
+      }
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current--;
+      if (dragCounter.current === 0) {
+        setIsDragActive(false);
+      }
+    };
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current = 0;
+      setIsDragActive(false);
+
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        const droppedFile = e.dataTransfer.files[0];
+        const ext = droppedFile.name.toLowerCase().split('.').pop();
+        if (ext === 'xlsx' || ext === 'csv' || ext === 'pdf') {
+          handleFileSelect(droppedFile);
+        } else {
+          showToast('Chỉ hỗ trợ tệp .xlsx, .csv hoặc .pdf', 'error');
+        }
+      }
+    };
+
+    window.addEventListener('dragenter', handleDragEnter);
+    window.addEventListener('dragleave', handleDragLeave);
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('drop', handleDrop);
+
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter);
+      window.removeEventListener('dragleave', handleDragLeave);
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, [targetLang]);
 
   // Helper to format language label
   const getLanguageLabel = (langCode: string): string => {
@@ -296,6 +351,7 @@ export const App: React.FC = () => {
       setFileSizeStr(meta.fileSizeStr);
       setActiveProjectId(id);
       localStorage.setItem('active_project_id', id);
+      setZoomLevel(isPdf ? 0.75 : 1.0);
 
       const mockFile = new File([buffers.origBuffer], meta.fileName, {
         type: isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -425,6 +481,7 @@ export const App: React.FC = () => {
         setOrigWorkbook(null);
         setTransWorkbook(null);
         setSpreadsheetTranslationMap(new Map());
+        setZoomLevel(0.75);
       } else {
         const wb = new ExcelJS.Workbook();
         await wb.xlsx.load(arrayBuffer);
@@ -443,6 +500,7 @@ export const App: React.FC = () => {
         setPdfTranslationMap(null);
         setPdfColorsMap(new Map());
         setPdfPageIndex(0);
+        setZoomLevel(1.0);
       }
 
       await saveProject(newMeta, newBuffers);
@@ -504,17 +562,8 @@ export const App: React.FC = () => {
     }
   };
 
-  // Clear current document view
-  const handleClearFile = async () => {
-    if (activeProjectId) {
-      try {
-        await deleteProject(activeProjectId);
-        const list = await listProjects();
-        setHistoryList(list);
-      } catch (err) {
-        console.error('Failed to delete cleared project:', err);
-      }
-    }
+  // Clear current document view (deselect/close file, keeping it in history)
+  const handleClearFile = () => {
     setFile(null);
     setOrigWorkbook(null);
     setTransWorkbook(null);
@@ -528,7 +577,7 @@ export const App: React.FC = () => {
     setTranslatedLang(null);
     setActiveProjectId(null);
     localStorage.removeItem('active_project_id');
-    showToast('Đã xoá tệp và toàn bộ dữ liệu dịch khỏi thiết bị.');
+    showToast('Đã đóng tài liệu.');
   };
 
   // Run document translation
@@ -1036,8 +1085,6 @@ export const App: React.FC = () => {
               <PdfToolbar 
                 sidebarCollapsed={sidebarCollapsed}
                 setSidebarCollapsed={setSidebarCollapsed}
-                zoomLevel={zoomLevel}
-                onZoomChange={setZoomLevel}
               />
             ) : (
               <SheetToolbar 
@@ -1127,6 +1174,7 @@ export const App: React.FC = () => {
             translatedWorksheet={transWorkbook?.getWorksheet(activeSheetIndex + 1) || undefined}
             showGridlines={showGridlines}
             zoomLevel={zoomLevel}
+            onZoomChange={setZoomLevel}
             fontSizeOffset={fontSizeOffset}
             onShowToast={showToast}
           />
@@ -1161,6 +1209,17 @@ export const App: React.FC = () => {
         showGridlines={showGridlines}
         setShowGridlines={setShowGridlines}
       />
+
+      {/* Global Drag and Drop Overlay */}
+      {isDragActive && (
+        <div className="global-drag-overlay">
+          <div className="global-drag-box">
+            <Upload size={48} className="global-drag-icon" />
+            <h2 className="global-drag-title">Thả tệp vào đây để tải lên</h2>
+            <p className="global-drag-desc">Hỗ trợ tệp bảng tính (.xlsx, .csv) hoặc PDF (.pdf)</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
