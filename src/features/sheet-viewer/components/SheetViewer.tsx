@@ -11,6 +11,10 @@ export interface SheetViewerProps {
   fontSizeOffset?: number;
   onShowToast?: (message: string, type?: 'success' | 'error') => void;
   onZoomChange?: (zoom: number) => void;
+  selectionMode?: 'idle' | 'selecting';
+  selectedRanges?: Array<{ startRow: number; startCol: number; endRow: number; endCol: number }>;
+  onSelectionChange?: (ranges: Array<{ startRow: number; startCol: number; endRow: number; endCol: number }>) => void;
+  onSelectionModeChange?: (mode: 'idle' | 'selecting') => void;
 }
 
 export interface SheetViewerRef {
@@ -26,7 +30,11 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
   zoomLevel,
   fontSizeOffset = 0,
   onShowToast,
-  onZoomChange
+  onZoomChange,
+  selectionMode = 'idle',
+  selectedRanges = [],
+  onSelectionChange,
+  onSelectionModeChange
 }, ref) => {
   // Tooltip hover state
   const [hoveredCell, setHoveredCell] = useState<{
@@ -50,6 +58,58 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
   });
 
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Drag selection state and handlers
+  const [isSelectingDrag, setIsSelectingDrag] = useState(false);
+
+  const handleCellMouseDown = (e: React.MouseEvent, r: number, c: number) => {
+    if (selectionMode !== 'selecting') return;
+    e.preventDefault();
+    setIsSelectingDrag(true);
+    const newRange = { startRow: r, startCol: c, endRow: r, endCol: c };
+    if (onSelectionChange) {
+      if (e.ctrlKey || e.metaKey) {
+        onSelectionChange([...selectedRanges, newRange]);
+      } else {
+        onSelectionChange([newRange]);
+      }
+    }
+  };
+
+  const handleCellMouseEnterSelect = (r: number, c: number) => {
+    if (selectionMode !== 'selecting' || !isSelectingDrag || selectedRanges.length === 0) return;
+    if (onSelectionChange) {
+      const updated = [...selectedRanges];
+      const lastIndex = updated.length - 1;
+      updated[lastIndex] = { ...updated[lastIndex], endRow: r, endCol: c };
+      onSelectionChange(updated);
+    }
+  };
+
+  useEffect(() => {
+    if (!isSelectingDrag) return;
+    const handleGlobalMouseUp = () => {
+      setIsSelectingDrag(false);
+      if (onSelectionModeChange) {
+        onSelectionModeChange('idle');
+      }
+    };
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [isSelectingDrag, onSelectionModeChange]);
+
+  const isCellSelected = (r: number, c: number) => {
+    if (selectedRanges.length === 0) return false;
+    return selectedRanges.some(range => {
+      const minRow = Math.min(range.startRow, range.endRow);
+      const maxRow = Math.max(range.startRow, range.endRow);
+      const minCol = Math.min(range.startCol, range.endCol);
+      const maxCol = Math.max(range.startCol, range.endCol);
+      return r >= minRow && r <= maxRow && c >= minCol && c <= maxCol;
+    });
+  };
 
   // Implement Trackpad Pinch-to-zoom & Ctrl+Scroll zoom for Sheet
   useEffect(() => {
@@ -609,7 +669,7 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
           ))}
 
           <table 
-            className={`excel-table ${showGridlines ? '' : 'no-gridlines'}`}
+            className={`excel-table ${showGridlines ? '' : 'no-gridlines'} ${selectionMode === 'selecting' ? 'selecting' : ''}`}
             style={{ width: `${totalWidth + 40}px` }}
           >
           <colgroup>
@@ -832,15 +892,19 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
                       </a>
                     ) : displayValue;
 
+                    const selectedClass = isCellSelected(r, c) ? 'in-selection' : '';
+
                     return (
                       <td
                         key={c}
                         colSpan={colSpan > 1 ? colSpan : undefined}
                         rowSpan={rowSpan > 1 ? rowSpan : undefined}
-                        className={`excel-cell ${isTranslated ? 'translated-cell-hover' : ''}`}
+                        className={`excel-cell ${isTranslated ? 'translated-cell-hover' : ''} ${selectedClass}`}
                         style={cellStyle}
                         title={isTranslated ? undefined : displayValue}
+                        onMouseDown={(e) => handleCellMouseDown(e, r, c)}
                         onMouseEnter={(e) => {
+                          handleCellMouseEnterSelect(r, c);
                           if (!isResizing && isTranslated && origText) {
                             const rect = e.currentTarget.getBoundingClientRect();
                             setHoveredCell({

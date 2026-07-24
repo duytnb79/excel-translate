@@ -12,6 +12,7 @@ export interface ProjectMetadata {
   activeTab: 'original' | 'translated';
   targetLang: string;
   translatedLangs?: string[];
+  aiConversationId?: string;
 }
 
 export interface ProjectBuffers {

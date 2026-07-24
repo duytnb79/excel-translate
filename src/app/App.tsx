@@ -7,13 +7,15 @@ import {
   Trash2,
   PanelLeftClose,
   Settings,
-  Upload
+  Upload,
+  MessageSquare
 } from 'lucide-react';
 
 // Shared Components
 import { Toast } from '../shared/components/Toast';
 import { ThemeToggle } from '../shared/components/ThemeToggle';
 import { SettingsModal } from '../shared/components/SettingsModal';
+import { getFirebaseIdToken } from '../shared/services/firebase';
 
 // Shared Utils
 import { 
@@ -42,6 +44,14 @@ import { parsePdfDocument, PdfDocumentData } from '../features/pdf-viewer/utils/
 import { compileTranslatedPdf } from '../features/pdf-viewer/utils/pdfCompiler';
 import { PdfViewer } from '../features/pdf-viewer/components/PdfViewer';
 import { PdfToolbar } from '../features/pdf-viewer/components/PdfToolbar';
+
+// Feature: AI Chat
+import { AiChatPanel } from '../features/ai-chat/components/AiChatPanel';
+import {
+  clearAiAccessKey,
+  getAiAccessKey,
+  pairAiAccessKey,
+} from '../features/ai-chat/services/aiAccess';
 
 // Providers
 import { useTheme } from './providers/ThemeProvider';
@@ -95,6 +105,12 @@ export const App: React.FC = () => {
   const [zoomLevel, setZoomLevel] = useState<number>(0.75);
   const [fontSizeOffset, setFontSizeOffset] = useState<number>(0);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [aiAccessKey, setAiAccessKeyState] = useState(() => getAiAccessKey());
+  const [aiAccessStatus, setAiAccessStatus] = useState<'idle' | 'pairing' | 'connected' | 'error'>(
+    () => getAiAccessKey() ? 'connected' : 'idle',
+  );
+  const [selectionMode, setSelectionMode] = useState<'idle' | 'selecting'>('idle');
+  const [selectedRanges, setSelectedRanges] = useState<Array<{ startRow: number; startCol: number; endRow: number; endCol: number }>>([]);
   const [isAllAutoFitted, setIsAllAutoFitted] = useState<boolean>(false);
   const sheetViewerRef = React.useRef<any>(null);
 
@@ -105,9 +121,11 @@ export const App: React.FC = () => {
     return wb.worksheets.map(s => s.name);
   }, [activeTab, origWorkbook, transWorkbook]);
 
-  // Reset auto-fit toggle when sheet or workbook changes
+  // Reset auto-fit toggle and range selection when sheet or workbook changes
   useEffect(() => {
     setIsAllAutoFitted(false);
+    setSelectedRanges([]);
+    setSelectionMode('idle');
   }, [activeSheetIndex, origWorkbook]);
 
   const handleToggleAutoFitAll = () => {
@@ -127,6 +145,8 @@ export const App: React.FC = () => {
   // History States
   const [historyList, setHistoryList] = useState<ProjectMetadata[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [aiConversationId, setAiConversationId] = useState<string | null>(null);
+  const [showAiPanel, setShowAiPanel] = useState(false);
 
   // Global Drag & Drop State
   const [isDragActive, setIsDragActive] = useState(false);
@@ -375,6 +395,8 @@ export const App: React.FC = () => {
       setTargetLang(meta.targetLang);
       setFileSizeStr(meta.fileSizeStr);
       setActiveProjectId(id);
+      setAiConversationId(meta.aiConversationId || null);
+      setShowAiPanel(false);
       localStorage.setItem('active_project_id', id);
       setZoomLevel(isPdf ? 0.75 : 1.0);
 
@@ -416,6 +438,8 @@ export const App: React.FC = () => {
           setTransPdfBuffer(null);
           setPdfTranslationMap(null);
           setActiveProjectId(null);
+          setAiConversationId(null);
+          setShowAiPanel(false);
           localStorage.removeItem('active_project_id');
         }
       }
@@ -547,6 +571,8 @@ export const App: React.FC = () => {
       setFile(selectedFile);
       setFileSizeStr(formatBytes(selectedFile.size));
       setActiveProjectId(newId);
+      setAiConversationId(null);
+      setShowAiPanel(false);
       localStorage.setItem('active_project_id', newId);
 
       showToast(`Đã tải tệp ${isPdf ? 'PDF' : 'bảng tính'} thành công!`);
@@ -567,7 +593,10 @@ export const App: React.FC = () => {
     setLoading(true);
     setImportLoading(true);
     try {
-      const response = await fetch(`/api/proxy-sheet?url=${encodeURIComponent(url.trim())}`);
+      const token = await getFirebaseIdToken();
+      const response = await fetch(`/api/proxy-sheet?url=${encodeURIComponent(url.trim())}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || `Lỗi tải bảng tính (${response.statusText})`);
@@ -609,6 +638,8 @@ export const App: React.FC = () => {
     setPdfPageIndex(0);
     setTranslatedLang(null);
     setActiveProjectId(null);
+    setAiConversationId(null);
+    setShowAiPanel(false);
     localStorage.removeItem('active_project_id');
     showToast('Đã đóng tài liệu.');
   };
@@ -957,6 +988,47 @@ export const App: React.FC = () => {
   };
 
   // Resolve current active sheet by its zero-based display position.
+  const handleAiAccessKeyChange = (key: string) => {
+    setAiAccessKeyState(key);
+    setAiAccessStatus('idle');
+    clearAiAccessKey();
+    setShowAiPanel(false);
+  };
+
+  const handlePairAiAccess = async () => {
+    setAiAccessStatus('pairing');
+    try {
+      await pairAiAccessKey(aiAccessKey);
+      setAiAccessStatus('connected');
+      showToast('Đã kết nối quyền truy cập AI Chat.');
+    } catch (error) {
+      setAiAccessStatus('error');
+      showToast(error instanceof Error ? error.message : 'Không thể xác thực secret key.', 'error');
+    }
+  };
+
+  const handleAiConversationCreated = async (conversationId: string) => {
+    setAiConversationId(conversationId);
+    if (!activeProjectId) return;
+
+    const meta = await getProjectMetadata(activeProjectId);
+    if (!meta) return;
+
+    await updateProjectMetadata({ ...meta, aiConversationId: conversationId });
+    setHistoryList(await listProjects());
+  };
+
+  const handleAiConversationReset = async () => {
+    setAiConversationId(null);
+    if (!activeProjectId) return;
+
+    const meta = await getProjectMetadata(activeProjectId);
+    if (!meta) return;
+
+    await updateProjectMetadata({ ...meta, aiConversationId: null });
+    setHistoryList(await listProjects());
+  };
+
   const activeWorkbook = activeTab === 'original' ? origWorkbook : transWorkbook;
   const effectiveActiveSheetIndex = useMemo(
     () => clampWorksheetIndex(activeSheetIndex, activeWorkbook?.worksheets.length ?? 0),
@@ -1158,8 +1230,28 @@ export const App: React.FC = () => {
                 </button>
               )}
 
+              {!pdfBuffer && origWorkbook && (
+                <button
+                  type="button"
+                  className={`btn btn-secondary ai-chat-toggle ${showAiPanel ? 'active' : ''}`}
+                  onClick={() => {
+                    if (aiAccessStatus !== 'connected') {
+                      setShowSettingsModal(true);
+                      return;
+                    }
+                    setShowAiPanel(current => !current);
+                  }}
+                  title={aiAccessStatus === 'connected'
+                    ? (showAiPanel ? 'Đóng trợ lý AI' : 'Phân tích bảng tính bằng AI')
+                    : 'Kết nối secret key để sử dụng AI Chat'}
+                >
+                  <MessageSquare size={14} />
+                  AI Chat
+                </button>
+              )}
+
               {/* Settings Button */}
-              <button 
+              <button
                 type="button"
                 className="btn-icon" 
                 title="Cấu hình hệ thống" 
@@ -1222,6 +1314,10 @@ export const App: React.FC = () => {
             onZoomChange={setZoomLevel}
             fontSizeOffset={fontSizeOffset}
             onShowToast={showToast}
+            selectionMode={selectionMode}
+            selectedRanges={selectedRanges}
+            onSelectionChange={setSelectedRanges}
+            onSelectionModeChange={setSelectionMode}
           />
         ) : origWorkbook ? (
           <div className="sheet-empty-state" style={{ flex: 1 }}>
@@ -1251,6 +1347,24 @@ export const App: React.FC = () => {
         )}
       </main>
 
+      {showAiPanel && aiAccessStatus === 'connected' && origWorkbook && activeProjectId && file && !pdfBuffer && (
+        <AiChatPanel
+          workbook={origWorkbook}
+          activeSheetIndex={effectiveActiveSheetIndex}
+          projectId={activeProjectId}
+          fileName={file.name}
+          conversationId={aiConversationId}
+          onConversationCreated={handleAiConversationCreated}
+          onConversationSelected={handleAiConversationCreated}
+          onConversationReset={handleAiConversationReset}
+          onClose={() => setShowAiPanel(false)}
+          selectionMode={selectionMode}
+          selectedRanges={selectedRanges}
+          onSelectionChange={setSelectedRanges}
+          onSelectionModeChange={setSelectionMode}
+        />
+      )}
+
       {/* Settings Configuration Modal */}
       <SettingsModal 
         isOpen={showSettingsModal}
@@ -1259,6 +1373,10 @@ export const App: React.FC = () => {
         setTranslationMode={setTranslationMode}
         geminiApiKey={geminiApiKey}
         setGeminiApiKey={setGeminiApiKey}
+        aiAccessKey={aiAccessKey}
+        setAiAccessKey={handleAiAccessKeyChange}
+        aiAccessStatus={aiAccessStatus}
+        onPairAiAccess={handlePairAiAccess}
         showGridlines={showGridlines}
         setShowGridlines={setShowGridlines}
       />

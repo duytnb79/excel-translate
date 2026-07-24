@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { X, Sparkles, Settings, Eye } from 'lucide-react';
+import { X, Sparkles, Settings, Eye, KeyRound, Loader } from 'lucide-react';
 import { ToggleSwitch } from './ToggleSwitch';
 
 export interface SettingsModalProps {
@@ -9,6 +9,10 @@ export interface SettingsModalProps {
   setTranslationMode: (mode: 'google' | 'gemini') => void;
   geminiApiKey: string;
   setGeminiApiKey: (key: string) => void;
+  aiAccessKey: string;
+  setAiAccessKey: (key: string) => void;
+  aiAccessStatus: 'idle' | 'pairing' | 'connected' | 'error';
+  onPairAiAccess: () => void;
   showGridlines: boolean;
   setShowGridlines: (show: boolean) => void;
 }
@@ -20,6 +24,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   setTranslationMode,
   geminiApiKey,
   setGeminiApiKey,
+  aiAccessKey,
+  setAiAccessKey,
+  aiAccessStatus,
+  onPairAiAccess,
   showGridlines,
   setShowGridlines
 }) => {
@@ -107,6 +115,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="modal-section">
+            <h3 className="modal-section-title">
+              <KeyRound size={14} style={{ color: 'var(--accent)' }} />
+              Quyền truy cập AI Chat
+            </h3>
+            <div className="control-group">
+              <label style={{ fontWeight: 600, fontSize: '11px' }}>Secret key:</label>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                <input
+                  type="password"
+                  className="input-field"
+                  placeholder="Nhập secret key do quản trị viên cấp..."
+                  value={aiAccessKey}
+                  onChange={(e) => setAiAccessKey(e.target.value)}
+                  style={{ flex: 1, minWidth: 0, fontSize: '12px' }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!aiAccessKey.trim() || aiAccessStatus === 'pairing'}
+                  onClick={onPairAiAccess}
+                  style={{ minWidth: '88px', padding: '6px 10px', fontSize: '11px' }}
+                >
+                  {aiAccessStatus === 'pairing' && <Loader size={13} className="spinner" />}
+                  {aiAccessStatus === 'connected' ? 'Đã kết nối' : 'Kết nối'}
+                </button>
+              </div>
+              <div className={`ai-access-status ${aiAccessStatus}`}
+              style={{ minWidth: '88px', padding: '6px 10px', fontSize: '11px' }}>
+                {aiAccessStatus === 'connected'
+                  ? 'Secret key đã được xác thực. Bạn có thể sử dụng AI Chat.'
+                  : aiAccessStatus === 'error'
+                    ? 'Không thể xác thực secret key. Vui lòng kiểm tra lại.'
+                    : 'AI Chat chỉ hoạt động sau khi secret key được backend xác thực.'}
+              </div>
+            </div>
           </div>
 
           {/* Section 2: Display Configuration */}
