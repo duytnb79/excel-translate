@@ -46,6 +46,17 @@ import { PdfToolbar } from '../features/pdf-viewer/components/PdfToolbar';
 // Providers
 import { useTheme } from './providers/ThemeProvider';
 
+const clampWorksheetIndex = (index: number, worksheetCount: number): number => {
+  if (worksheetCount <= 0) return 0;
+  const normalizedIndex = Number.isFinite(index) ? Math.trunc(index) : 0;
+  return Math.min(Math.max(normalizedIndex, 0), worksheetCount - 1);
+};
+
+const getWorksheetAt = (workbook: ExcelJS.Workbook | null, index: number) => {
+  if (!workbook || workbook.worksheets.length === 0) return undefined;
+  return workbook.worksheets[clampWorksheetIndex(index, workbook.worksheets.length)];
+};
+
 export const App: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
 
@@ -288,6 +299,8 @@ export const App: React.FC = () => {
       if (!buffers) return;
 
       const isPdf = meta.fileName.toLowerCase().endsWith('.pdf');
+      let restoredOrigWorkbook: ExcelJS.Workbook | null = null;
+      let restoredTransWorkbook: ExcelJS.Workbook | null = null;
 
       if (isPdf) {
         setPdfBuffer(buffers.origBuffer);
@@ -317,6 +330,7 @@ export const App: React.FC = () => {
         // Restore original workbook
         const origWb = new ExcelJS.Workbook();
         await origWb.xlsx.load(buffers.origBuffer);
+        restoredOrigWorkbook = origWb;
         setOrigWorkbook(origWb);
 
         // Restore translated workbook if it exists for the current targetLang
@@ -330,6 +344,7 @@ export const App: React.FC = () => {
         if (cachedBuffer) {
           const transWb = new ExcelJS.Workbook();
           await transWb.xlsx.load(cachedBuffer);
+          restoredTransWorkbook = transWb;
           setTransWorkbook(transWb);
           setTranslatedLang(meta.targetLang);
         } else {
@@ -344,9 +359,19 @@ export const App: React.FC = () => {
       }
 
       // Restore parameters
-      setActiveSheetIndex(meta.activeSheetIndex);
+      const restoredTab = !isPdf && meta.activeTab === 'translated' && !restoredTransWorkbook
+        ? 'original'
+        : meta.activeTab;
+      const restoredWorkbook = restoredTab === 'translated'
+        ? restoredTransWorkbook
+        : restoredOrigWorkbook;
+      const restoredSheetIndex = isPdf
+        ? 0
+        : clampWorksheetIndex(meta.activeSheetIndex, restoredWorkbook?.worksheets.length ?? 0);
+
+      setActiveSheetIndex(restoredSheetIndex);
       setPdfPageIndex(0);
-      setActiveTab(meta.activeTab);
+      setActiveTab(restoredTab);
       setTargetLang(meta.targetLang);
       setFileSizeStr(meta.fileSizeStr);
       setActiveProjectId(id);
@@ -403,17 +428,25 @@ export const App: React.FC = () => {
 
   // Helper to persist view state changes (tab or sheet selection)
   const handleViewChange = async (tab: 'original' | 'translated', sheetIndex: number) => {
-    setActiveTab(tab);
-    setActiveSheetIndex(sheetIndex);
-    
+    const normalizedTab = !pdfBuffer && tab === 'translated' && !transWorkbook
+      ? 'original'
+      : tab;
+    const targetWorkbook = normalizedTab === 'original' ? origWorkbook : transWorkbook;
+    const normalizedSheetIndex = pdfBuffer
+      ? sheetIndex
+      : clampWorksheetIndex(sheetIndex, targetWorkbook?.worksheets.length ?? 0);
+
+    setActiveTab(normalizedTab);
+    setActiveSheetIndex(normalizedSheetIndex);
+
     if (activeProjectId) {
       try {
         const meta = await getProjectMetadata(activeProjectId);
         if (meta) {
           const updatedMeta = {
             ...meta,
-            activeSheetIndex: sheetIndex,
-            activeTab: tab,
+            activeSheetIndex: normalizedSheetIndex,
+            activeTab: normalizedTab,
             targetLang
           };
           await updateProjectMetadata(updatedMeta);
@@ -923,12 +956,24 @@ export const App: React.FC = () => {
     }
   };
 
-  // Resolve current active sheet to view
-  const activeWorksheet = useMemo(() => {
-    const wb = activeTab === 'original' ? origWorkbook : transWorkbook;
-    if (!wb) return null;
-    return wb.getWorksheet(activeSheetIndex + 1);
-  }, [activeTab, origWorkbook, transWorkbook, activeSheetIndex]);
+  // Resolve current active sheet by its zero-based display position.
+  const activeWorkbook = activeTab === 'original' ? origWorkbook : transWorkbook;
+  const effectiveActiveSheetIndex = useMemo(
+    () => clampWorksheetIndex(activeSheetIndex, activeWorkbook?.worksheets.length ?? 0),
+    [activeSheetIndex, activeWorkbook]
+  );
+  const activeWorksheet = useMemo(
+    () => getWorksheetAt(activeWorkbook, effectiveActiveSheetIndex),
+    [activeWorkbook, effectiveActiveSheetIndex]
+  );
+  const originalWorksheet = useMemo(
+    () => getWorksheetAt(origWorkbook, effectiveActiveSheetIndex),
+    [origWorkbook, effectiveActiveSheetIndex]
+  );
+  const translatedWorksheet = useMemo(
+    () => getWorksheetAt(transWorkbook, effectiveActiveSheetIndex),
+    [transWorkbook, effectiveActiveSheetIndex]
+  );
 
   return (
     <div className="app-container">
@@ -1136,7 +1181,7 @@ export const App: React.FC = () => {
               <button 
                 type="button"
                 className={`tab-btn ${activeTab === 'original' ? 'active' : ''}`}
-                onClick={() => handleViewChange('original', activeSheetIndex)}
+                onClick={() => handleViewChange('original', effectiveActiveSheetIndex)}
               >
                 Trước khi dịch
               </button>
@@ -1144,7 +1189,7 @@ export const App: React.FC = () => {
                 type="button"
                 className={`tab-btn ${activeTab === 'translated' ? 'active' : ''}`}
                 disabled={pdfBuffer ? !transPdfBuffer : !transWorkbook}
-                onClick={() => handleViewChange('translated', activeSheetIndex)}
+                onClick={() => handleViewChange('translated', effectiveActiveSheetIndex)}
                 title={!(pdfBuffer ? transPdfBuffer : transWorkbook) ? 'Vui lòng nhấn "Dịch Ngay" trước' : ''}
               >
                 Sau khi dịch
@@ -1170,14 +1215,22 @@ export const App: React.FC = () => {
           <SheetViewer 
             ref={sheetViewerRef}
             worksheet={activeWorksheet}
-            originalWorksheet={origWorkbook?.getWorksheet(activeSheetIndex + 1) || undefined}
-            translatedWorksheet={transWorkbook?.getWorksheet(activeSheetIndex + 1) || undefined}
+            originalWorksheet={originalWorksheet}
+            translatedWorksheet={translatedWorksheet}
             showGridlines={showGridlines}
             zoomLevel={zoomLevel}
             onZoomChange={setZoomLevel}
             fontSizeOffset={fontSizeOffset}
             onShowToast={showToast}
           />
+        ) : origWorkbook ? (
+          <div className="sheet-empty-state" style={{ flex: 1 }}>
+            <FileSpreadsheet size={48} strokeWidth={1.5} />
+            <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-main)' }}>Không thể hiển thị trang tính</h2>
+            <p style={{ maxWidth: '280px', fontSize: '12px' }}>
+              Trang tính đã chọn không tồn tại hoặc tệp không chứa trang tính hợp lệ.
+            </p>
+          </div>
         ) : (
           <div className="sheet-empty-state" style={{ flex: 1 }}>
             <FileSpreadsheet size={48} strokeWidth={1.5} />
@@ -1192,7 +1245,7 @@ export const App: React.FC = () => {
         {!pdfBuffer && sheetNames.length > 0 && (
           <SheetSelector 
             sheetNames={sheetNames}
-            activeIndex={activeSheetIndex}
+            activeIndex={effectiveActiveSheetIndex}
             onSelect={(index) => handleViewChange(activeTab, index)}
           />
         )}
