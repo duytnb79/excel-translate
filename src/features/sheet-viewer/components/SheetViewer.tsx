@@ -81,8 +81,16 @@ export const SheetViewer = forwardRef<SheetViewerRef, SheetViewerProps>(({
     if (onSelectionChange) {
       const updated = [...selectedRanges];
       const lastIndex = updated.length - 1;
-      updated[lastIndex] = { ...updated[lastIndex], endRow: r, endCol: c };
-      onSelectionChange(updated);
+      const lastRange = updated[lastIndex];
+      if (lastRange) {
+        updated[lastIndex] = {
+          startRow: lastRange.startRow,
+          startCol: lastRange.startCol,
+          endRow: r,
+          endCol: c
+        };
+        onSelectionChange(updated);
+      }
     }
   };
 

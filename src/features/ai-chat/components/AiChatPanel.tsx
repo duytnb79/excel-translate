@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Send, Square, X, Info, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { useAiChat } from '../hooks/useAiChat';
 import { getConversations, deleteConversation } from '../services/chatApi';
+import { SheetScope } from '../types';
 
 interface AiChatPanelProps {
   workbook: any;
@@ -178,8 +179,8 @@ function renderMarkdown(text: string): React.ReactNode {
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)/);
     if (headingMatch) {
       flushList(index);
-      const level = headingMatch[1].length;
-      const content = headingMatch[2];
+      const level = headingMatch[1]?.length || 1;
+      const content = headingMatch[2] || '';
       const fontSize = level === 1 ? '1.35em' : level === 2 ? '1.2em' : '1.05em';
       elements.push(
         <div 
@@ -207,8 +208,8 @@ function renderMarkdown(text: string): React.ReactNode {
     const numberedMatch = trimmed.match(/^(\d+)\.\s(.*)/);
     if (numberedMatch) {
       flushList(index);
-      const num = numberedMatch[1];
-      const content = numberedMatch[2];
+      const num = numberedMatch[1] || '';
+      const content = numberedMatch[2] || '';
       elements.push(
         <div key={`num-${index}`} style={{ margin: '6px 0', display: 'flex', gap: '6px' }}>
           <strong style={{ minWidth: '18px' }}>{num}.</strong>
@@ -473,6 +474,7 @@ export function AiChatPanel({
                     const activeIdx = historyList.findIndex(h => h.id === conversationId);
                     if (activeIdx === -1) return 'Hội thoại mới';
                     const activeItem = historyList[activeIdx];
+                    if (!activeItem) return 'Hội thoại mới';
                     return activeItem.title && activeItem.title !== 'Hội thoại mới' 
                       ? activeItem.title 
                       : `Hội thoại ${historyList.length - activeIdx}`;
@@ -694,7 +696,7 @@ export function AiChatPanel({
 
         {scopeMode === 'selected' && (
           <div className="ai-sheet-picker">
-            {workbook.worksheets.map((sheet, index) => (
+            {workbook.worksheets.map((sheet: any, index: number) => (
               <label key={sheet.id} className="ai-sheet-option">
                 <input
                   type="checkbox"
@@ -714,87 +716,10 @@ export function AiChatPanel({
         {chat.isLoadingHistory ? (
           <div className="ai-chat-status">Đang tải cuộc trò chuyện...</div>
         ) : chat.messages.length === 0 ? (
-          <div className="ai-chat-empty" style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '24px 16px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
-              <Bot size={32} strokeWidth={1.5} style={{ color: 'var(--accent, #3b82f6)' }} />
-              <strong style={{ fontSize: '13px' }}>Hỏi AI về dữ liệu trong sheet</strong>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted, #64748b)', textAlign: 'center' }}>
-                Chọn một câu hỏi gợi ý bên dưới hoặc tự nhập câu hỏi ở ô chat
-              </span>
-            </div>
-
-            <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: '1fr 1fr', 
-              gap: '8px', 
-              width: '100%', 
-              marginTop: '8px'
-            }}>
-              {[
-                { 
-                  title: '📊 Tóm tắt', 
-                  desc: 'Tóm tắt sheet hiện tại',
-                  prompt: 'Hãy tóm tắt các thông tin chính của sheet hiện tại.' 
-                },
-                { 
-                  title: '🔍 Lọc lỗi', 
-                  desc: 'Tìm các dòng lỗi hoặc trống',
-                  prompt: 'Hãy tìm giúp tôi các giá trị bất thường, bị lỗi hoặc ô trống trong sheet này.' 
-                },
-                { 
-                  title: '🏆 Tìm Max/Min', 
-                  desc: 'Tìm dòng giá trị lớn nhất',
-                  prompt: 'Hãy phân tích sheet này và chỉ ra dòng/cột có giá trị lớn nhất.' 
-                },
-                { 
-                  title: '💡 Tối ưu hóa', 
-                  desc: 'Gợi ý tối ưu công thức',
-                  prompt: 'Hãy gợi ý cách tối ưu hóa các công thức trong bảng tính này.' 
-                }
-              ].map((item, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => {
-                    setDraft(item.prompt);
-                    const inputEl = document.getElementById('ai-chat-input');
-                    if (inputEl) inputEl.focus();
-                  }}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-start',
-                    gap: '4px',
-                    padding: '10px 12px',
-                    background: 'var(--bg-app, #f1f5f9)',
-                    border: '1px solid var(--border-subtle, #cbd5e1)',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    textAlign: 'left',
-                    width: '100%',
-                    boxSizing: 'border-box'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--accent, #3b82f6)';
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0,0,0,0.05)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--border-subtle, #cbd5e1)';
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = 'none';
-                  }}
-                >
-                  <span style={{ fontWeight: 700, fontSize: '11px', color: 'var(--text-main, #0f172a)' }}>
-                    {item.title}
-                  </span>
-                  <span style={{ fontSize: '9px', color: 'var(--text-muted, #64748b)' }}>
-                    {item.desc}
-                  </span>
-                </button>
-              ))}
-            </div>
+          <div className="ai-chat-empty">
+            <Bot size={30} strokeWidth={1.5} />
+            <strong>Hỏi AI về dữ liệu trong sheet</strong>
+            <span>Ví dụ: “Tóm tắt sheet này” hoặc “So sánh doanh thu giữa các sheet”.</span>
           </div>
         ) : (
           <>
@@ -857,6 +782,56 @@ export function AiChatPanel({
       )}
 
       <div className="ai-chat-composer">
+        {chat.messages.length === 0 && (
+          <div style={{ 
+            display: 'flex', 
+            flexWrap: 'wrap', 
+            gap: '6px', 
+            marginBottom: '8px',
+            padding: '0 4px'
+          }}>
+            {[
+              { label: '📊 Tóm tắt sheet', prompt: 'Hãy tóm tắt các thông tin chính của sheet hiện tại.' },
+              { label: '🔍 Tìm ô lỗi/trống', prompt: 'Hãy tìm giúp tôi các giá trị bất thường, bị lỗi hoặc ô trống trong sheet này.' },
+              { label: '🏆 Tìm Max/Min', prompt: 'Hãy phân tích sheet này và chỉ ra dòng/cột có giá trị lớn nhất.' },
+              { label: '💡 Tối ưu công thức', prompt: 'Hãy gợi ý cách tối ưu hóa các công thức trong bảng tính này.' }
+            ].map((item, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => {
+                  setDraft(item.prompt);
+                  const inputEl = document.getElementById('ai-chat-input');
+                  if (inputEl) inputEl.focus();
+                }}
+                style={{
+                  background: 'var(--bg-app, #f1f5f9)',
+                  border: '1px solid var(--border-subtle, #cbd5e1)',
+                  borderRadius: '16px',
+                  padding: '5px 10px',
+                  fontSize: '10px',
+                  fontWeight: 500,
+                  color: 'var(--text-main, #0f172a)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
+                  whiteSpace: 'nowrap'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--accent, #3b82f6)';
+                  e.currentTarget.style.background = 'rgba(59, 130, 246, 0.05)';
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border-subtle, #cbd5e1)';
+                  e.currentTarget.style.background = 'var(--bg-app, #f1f5f9)';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
         {chat.error && <div className="ai-chat-error">{chat.error}</div>}
         {scopeMode === 'selected' && selectedSheetIndices.length === 0 && (
           <div className="ai-chat-error">Vui lòng chọn ít nhất một sheet.</div>

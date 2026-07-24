@@ -1025,7 +1025,7 @@ export const App: React.FC = () => {
     const meta = await getProjectMetadata(activeProjectId);
     if (!meta) return;
 
-    await updateProjectMetadata({ ...meta, aiConversationId: null });
+    await updateProjectMetadata({ ...meta, aiConversationId: undefined });
     setHistoryList(await listProjects());
   };
 

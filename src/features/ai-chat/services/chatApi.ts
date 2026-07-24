@@ -93,6 +93,7 @@ export async function getConversations(projectId?: string) {
     id: string;
     projectId: string;
     fileName: string;
+    title?: string;
     updatedAt: string;
   }>;
 }
