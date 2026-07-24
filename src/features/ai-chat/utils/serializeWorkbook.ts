@@ -2,10 +2,12 @@ import type ExcelJS from 'exceljs';
 import { getCellText } from '../../sheet-viewer/utils/excelParser';
 import {
   CHAT_CONTEXT_LIMITS,
+  type PreparedWorkbookContext,
   type SheetScope,
   type SpreadsheetCellRecord,
   type SpreadsheetContextPayload,
   type SpreadsheetSheetContext,
+  type WorkbookContextEstimate,
 } from '../types';
 
 export class SpreadsheetContextError extends Error {}
@@ -66,27 +68,46 @@ function getPrimitiveValue(cell: ExcelJS.Cell, displayValue: string) {
   return displayValue;
 }
 
-export function serializeWorkbookContext(
+export const LARGE_CONTEXT_WARNING_THRESHOLDS = {
+  estimatedInputTokens: 25_000,
+  projectedGridCells: 50_000,
+  sourceCharacters: 100_000,
+} as const;
+
+export function isLargeWorkbookContext(estimate: WorkbookContextEstimate): boolean {
+  return (
+    estimate.estimatedInputTokens >= LARGE_CONTEXT_WARNING_THRESHOLDS.estimatedInputTokens
+    || estimate.projectedGridCells >= LARGE_CONTEXT_WARNING_THRESHOLDS.projectedGridCells
+    || estimate.sourceCharacters >= LARGE_CONTEXT_WARNING_THRESHOLDS.sourceCharacters
+  );
+}
+
+export function prepareWorkbookContext(
   workbook: ExcelJS.Workbook,
   scope: SheetScope,
-): SpreadsheetContextPayload {
+): PreparedWorkbookContext {
   const sheetIndices = getScopeIndices(workbook, scope);
   const sheets: SpreadsheetSheetContext[] = [];
   let totalCells = 0;
   let totalCharacters = 0;
+  let projectedGridCells = 0;
 
   for (const sheetIndex of sheetIndices) {
     const worksheet = workbook.worksheets[sheetIndex];
     if (!worksheet) continue;
 
     const rows: SpreadsheetSheetContext['rows'] = [];
+    let minRow = Number.POSITIVE_INFINITY;
+    let maxRow = 0;
+    let minColumn = Number.POSITIVE_INFINITY;
+    let maxColumn = 0;
 
     worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (scope.type === 'range') {
         const inAnyRowRange = scope.ranges.some(r => {
-          const minRow = Math.min(r.startRow, r.endRow);
-          const maxRow = Math.max(r.startRow, r.endRow);
-          return rowNumber >= minRow && rowNumber <= maxRow;
+          const rangeMinRow = Math.min(r.startRow, r.endRow);
+          const rangeMaxRow = Math.max(r.startRow, r.endRow);
+          return rowNumber >= rangeMinRow && rowNumber <= rangeMaxRow;
         });
         if (!inAnyRowRange) return;
       }
@@ -96,11 +117,11 @@ export function serializeWorkbookContext(
       row.eachCell({ includeEmpty: false }, (cell, columnNumber) => {
         if (scope.type === 'range') {
           const inAnyCellRange = scope.ranges.some(r => {
-            const minRow = Math.min(r.startRow, r.endRow);
-            const maxRow = Math.max(r.startRow, r.endRow);
-            const minCol = Math.min(r.startCol, r.endCol);
-            const maxCol = Math.max(r.startCol, r.endCol);
-            return rowNumber >= minRow && rowNumber <= maxRow && columnNumber >= minCol && columnNumber <= maxCol;
+            const rangeMinRow = Math.min(r.startRow, r.endRow);
+            const rangeMaxRow = Math.max(r.startRow, r.endRow);
+            const rangeMinCol = Math.min(r.startCol, r.endCol);
+            const rangeMaxCol = Math.max(r.startCol, r.endCol);
+            return rowNumber >= rangeMinRow && rowNumber <= rangeMaxRow && columnNumber >= rangeMinCol && columnNumber <= rangeMaxCol;
           });
           if (!inAnyCellRange) return;
         }
@@ -117,6 +138,10 @@ export function serializeWorkbookContext(
 
         totalCells += 1;
         totalCharacters += displayValue.length + (formula?.length || 0);
+        minRow = Math.min(minRow, rowNumber);
+        maxRow = Math.max(maxRow, rowNumber);
+        minColumn = Math.min(minColumn, columnNumber);
+        maxColumn = Math.max(maxColumn, columnNumber);
 
         if (totalCells > CHAT_CONTEXT_LIMITS.maxCells) {
           throw new SpreadsheetContextError(
@@ -144,6 +169,10 @@ export function serializeWorkbookContext(
       }
     });
 
+    if (maxRow > 0 && maxColumn > 0) {
+      projectedGridCells += (maxRow - minRow + 1) * (maxColumn - minColumn + 1);
+    }
+
     sheets.push({
       index: sheetIndex,
       name: worksheet.name,
@@ -153,5 +182,31 @@ export function serializeWorkbookContext(
     });
   }
 
-  return { scope, sheets };
+  const context: SpreadsheetContextPayload = { scope, sheets };
+  const serializedContext = JSON.stringify(context);
+  const serializedCharacters = serializedContext.length;
+  const serializedBytes = new TextEncoder().encode(serializedContext).byteLength;
+  const estimatedDenseGridCharacters = totalCharacters + projectedGridCells * 3;
+  const estimatedInputTokens = Math.ceil(
+    Math.max(serializedCharacters, estimatedDenseGridCharacters) / 4,
+  );
+
+  return {
+    context,
+    estimate: {
+      sheetCount: sheets.length,
+      nonEmptyCellCount: totalCells,
+      sourceCharacters: totalCharacters,
+      serializedBytes,
+      projectedGridCells,
+      estimatedInputTokens,
+    },
+  };
+}
+
+export function serializeWorkbookContext(
+  workbook: ExcelJS.Workbook,
+  scope: SheetScope,
+): SpreadsheetContextPayload {
+  return prepareWorkbookContext(workbook, scope).context;
 }

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type ExcelJS from 'exceljs';
-import type { ChatMessage, ChatUsage, SheetScope } from '../types';
-import { serializeWorkbookContext } from '../utils/serializeWorkbook';
+import type { ChatMessage, ChatUsage, PreparedWorkbookContext, SheetScope } from '../types';
 import {
   createConversation,
   getConversationMessages,
@@ -88,7 +87,7 @@ export function useAiChat(options: UseAiChatOptions) {
     abortRef.current?.abort();
   }, []);
 
-  const sendMessage = useCallback(async (content: string, scope: SheetScope) => {
+  const sendMessage = useCallback(async (content: string, preparedContext: PreparedWorkbookContext) => {
     const message = content.trim();
     if (!message || isStreaming) return;
     if (!options.workbook || !options.projectId) {
@@ -96,7 +95,7 @@ export function useAiChat(options: UseAiChatOptions) {
       return;
     }
 
-    const context = serializeWorkbookContext(options.workbook, scope);
+    const context = preparedContext.context;
     setError(null);
     setIsStreaming(true);
 

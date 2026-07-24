@@ -1283,6 +1283,46 @@ input:checked + .slider:before {
   background-color: rgba(0, 0, 0, 0.2);
 }
 
+.ai-large-context-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ai-large-context-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-app);
+}
+
+.ai-large-context-summary span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.ai-large-context-summary strong {
+  color: var(--text-main);
+  font-size: 12px;
+}
+
+.ai-large-context-skip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-top: 2px;
+  color: var(--text-main);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ai-large-context-skip input {
+  margin: 0;
+}
+
 @keyframes modalFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -1537,6 +1577,20 @@ input:checked + .slider:before {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.ai-message-content .ai-markdown-list {
+  margin: 6px 0;
+  padding-left: 20px;
+  white-space: normal;
+}
+
+.ai-message-content .ai-markdown-list .ai-markdown-list {
+  margin: 3px 0 2px;
+}
+
+.ai-message-content .ai-markdown-list li {
+  margin: 3px 0;
 }
 
 .ai-message.user .ai-message-content {

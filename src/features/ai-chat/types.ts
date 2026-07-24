@@ -35,6 +35,20 @@ export interface SpreadsheetContextPayload {
   sheets: SpreadsheetSheetContext[];
 }
 
+export interface WorkbookContextEstimate {
+  sheetCount: number;
+  nonEmptyCellCount: number;
+  sourceCharacters: number;
+  serializedBytes: number;
+  projectedGridCells: number;
+  estimatedInputTokens: number;
+}
+
+export interface PreparedWorkbookContext {
+  context: SpreadsheetContextPayload;
+  estimate: WorkbookContextEstimate;
+}
+
 export interface ChatUsage {
   inputTokens: number;
   outputTokens: number;

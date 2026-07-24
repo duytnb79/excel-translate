@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Send, Square, X, Info, Plus, Trash2, ChevronDown } from 'lucide-react';
+import { AlertTriangle, Bot, Send, Square, X, Info, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { useAiChat } from '../hooks/useAiChat';
 import { getConversations, deleteConversation } from '../services/chatApi';
-import { SheetScope } from '../types';
+import type { PreparedWorkbookContext, SheetScope } from '../types';
+import { isLargeWorkbookContext, prepareWorkbookContext } from '../utils/serializeWorkbook';
 
 interface AiChatPanelProps {
   workbook: any;
@@ -52,25 +53,15 @@ function estimateCost(inputTokens: number, outputTokens: number, model?: string)
 
 type ScopeMode = SheetScope['type'];
 
+let skipLargeContextWarningsForPage = false;
+
 function renderMarkdown(text: string): React.ReactNode {
   if (!text) return null;
 
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
-  let listItems: React.ReactNode[] = [];
   let inCodeBlock = false;
   let codeBlockContent: string[] = [];
-
-  const flushList = (key: number) => {
-    if (listItems.length > 0) {
-      elements.push(
-        <ul key={`list-${key}`} style={{ paddingLeft: '20px', margin: '8px 0', listStyleType: 'disc' }}>
-          {listItems}
-        </ul>
-      );
-      listItems = [];
-    }
-  };
 
   const parseInline = (line: string): React.ReactNode[] => {
     const inlineParts: React.ReactNode[] = [];
@@ -126,11 +117,83 @@ function renderMarkdown(text: string): React.ReactNode {
     return inlineParts;
   };
 
-  lines.forEach((line, index) => {
+  type MarkdownListItem = {
+    content: string;
+    children: MarkdownList[];
+  };
+
+  type MarkdownList = {
+    ordered: boolean;
+    start?: number;
+    items: MarkdownListItem[];
+  };
+
+  const matchListLine = (line: string) => {
+    const match = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+    if (!match) return null;
+
+    return {
+      indent: (match[1] || '').replace(/\t/g, '    ').length,
+      marker: match[2] || '-',
+      content: match[3] || ''
+    };
+  };
+
+  const parseList = (startIndex: number, baseIndent: number): { list: MarkdownList; nextIndex: number } => {
+    const firstMatch = matchListLine(lines[startIndex] || '');
+    const ordered = Boolean(firstMatch?.marker.match(/^\d+\.$/));
+    const list: MarkdownList = {
+      ordered,
+      start: ordered ? Number.parseInt(firstMatch?.marker || '1', 10) : undefined,
+      items: []
+    };
+    let index = startIndex;
+
+    while (index < lines.length) {
+      const match = matchListLine(lines[index] || '');
+      if (!match || match.indent < baseIndent) break;
+
+      if (match.indent > baseIndent) {
+        const parentItem = list.items[list.items.length - 1];
+        if (!parentItem) break;
+
+        const nested = parseList(index, match.indent);
+        parentItem.children.push(nested.list);
+        index = nested.nextIndex;
+        continue;
+      }
+
+      const isOrdered = /^\d+\.$/.test(match.marker);
+      if (isOrdered !== ordered) break;
+
+      list.items.push({ content: match.content, children: [] });
+      index++;
+    }
+
+    return { list, nextIndex: index };
+  };
+
+  const renderList = (list: MarkdownList, key: string): React.ReactNode => {
+    const items = list.items.map((item, itemIndex) => (
+      <li key={`${key}-item-${itemIndex}`}>
+        {parseInline(item.content)}
+        {item.children.map((child, childIndex) => renderList(child, `${key}-${itemIndex}-${childIndex}`))}
+      </li>
+    ));
+
+    if (list.ordered) {
+      return <ol key={key} start={list.start} className="ai-markdown-list">{items}</ol>;
+    }
+
+    return <ul key={key} className="ai-markdown-list">{items}</ul>;
+  };
+
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] || '';
     const trimmed = line.trim();
 
     if (trimmed.startsWith('```')) {
-      flushList(index);
       if (inCodeBlock) {
         elements.push(
           <pre key={`code-block-${index}`} style={{
@@ -153,81 +216,69 @@ function renderMarkdown(text: string): React.ReactNode {
       } else {
         inCodeBlock = true;
       }
-      return;
+      index++;
+      continue;
     }
 
     if (inCodeBlock) {
       codeBlockContent.push(line);
-      return;
+      index++;
+      continue;
     }
 
     if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
-      flushList(index);
       elements.push(
-        <hr 
-          key={`hr-${index}`} 
-          style={{ 
-            border: 'none', 
-            borderTop: '1px solid var(--border-subtle, #334155)', 
-            margin: '12px 0' 
-          }} 
+        <hr
+          key={`hr-${index}`}
+          style={{
+            border: 'none',
+            borderTop: '1px solid var(--border-subtle, #334155)',
+            margin: '12px 0'
+          }}
         />
       );
-      return;
+      index++;
+      continue;
     }
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)/);
     if (headingMatch) {
-      flushList(index);
       const level = headingMatch[1]?.length || 1;
       const content = headingMatch[2] || '';
       const fontSize = level === 1 ? '1.35em' : level === 2 ? '1.2em' : '1.05em';
       elements.push(
-        <div 
-          key={`h-${index}`} 
-          style={{ 
-            fontSize, 
-            fontWeight: 'bold', 
-            marginTop: '10px', 
+        <div
+          key={`h-${index}`}
+          style={{
+            fontSize,
+            fontWeight: 'bold',
+            marginTop: '10px',
             marginBottom: '4px',
-            color: 'var(--text-main)' 
+            color: 'var(--text-main)'
           }}
         >
           {parseInline(content)}
         </div>
       );
-      return;
+      index++;
+      continue;
     }
 
-    if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
-      const content = line.replace(/^\s*[\*\-]\s/, '');
-      listItems.push(<li key={`li-${index}`} style={{ margin: '4px 0' }}>{parseInline(content)}</li>);
-      return;
+    const listMatch = matchListLine(line);
+    if (listMatch) {
+      const parsed = parseList(index, listMatch.indent);
+      elements.push(renderList(parsed.list, `list-${index}`));
+      index = parsed.nextIndex;
+      continue;
     }
 
-    const numberedMatch = trimmed.match(/^(\d+)\.\s(.*)/);
-    if (numberedMatch) {
-      flushList(index);
-      const num = numberedMatch[1] || '';
-      const content = numberedMatch[2] || '';
-      elements.push(
-        <div key={`num-${index}`} style={{ margin: '6px 0', display: 'flex', gap: '6px' }}>
-          <strong style={{ minWidth: '18px' }}>{num}.</strong>
-          <div>{parseInline(content)}</div>
-        </div>
-      );
-      return;
-    }
-
-    flushList(index);
     if (trimmed === '') {
       elements.push(<div key={`br-${index}`} style={{ height: '8px' }} />);
     } else {
       elements.push(<div key={`p-${index}`} style={{ margin: '6px 0' }}>{parseInline(line)}</div>);
     }
-  });
-
-  flushList(lines.length);
+    index++;
+  }
 
   if (inCodeBlock && codeBlockContent.length > 0) {
     elements.push(
@@ -273,6 +324,12 @@ export function AiChatPanel({
   const [historyList, setHistoryList] = useState<Array<{ id: string; title?: string; updatedAt: string }>>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [pendingSubmission, setPendingSubmission] = useState<{
+    content: string;
+    preparedContext: PreparedWorkbookContext;
+  } | null>(null);
+  const [skipLargeContextWarnings, setSkipLargeContextWarnings] = useState(false);
+  const [contextPreparationError, setContextPreparationError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -285,6 +342,20 @@ export function AiChatPanel({
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
+
+  useEffect(() => {
+    if (!pendingSubmission) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPendingSubmission(null);
+        setSkipLargeContextWarnings(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [pendingSubmission]);
 
   const loadHistory = React.useCallback(() => {
     getConversations(projectId)
@@ -357,13 +428,51 @@ export function AiChatPanel({
     return { type: 'current', sheetIndex: activeSheetIndex };
   }, [activeSheetIndex, scopeMode, selectedSheetIndices, selectedRanges]);
 
+  const sendPreparedSubmission = (content: string, preparedContext: PreparedWorkbookContext) => {
+    setDraft('');
+    setContextPreparationError(null);
+    void chat.sendMessage(content, preparedContext);
+  };
+
   const submit = () => {
     if (!draft.trim()) return;
     if (scopeMode === 'selected' && selectedSheetIndices.length === 0) return;
     if (scopeMode === 'range' && selectedRanges.length === 0) return;
-    const content = draft;
-    setDraft('');
-    void chat.sendMessage(content, scope);
+
+    try {
+      const content = draft;
+      const preparedContext = prepareWorkbookContext(workbook, scope);
+      setContextPreparationError(null);
+
+      if (!skipLargeContextWarningsForPage && isLargeWorkbookContext(preparedContext.estimate)) {
+        setSkipLargeContextWarnings(false);
+        setPendingSubmission({ content, preparedContext });
+        return;
+      }
+
+      sendPreparedSubmission(content, preparedContext);
+    } catch (error) {
+      setContextPreparationError(
+        error instanceof Error ? error.message : 'Không thể chuẩn bị dữ liệu để gửi đến AI.',
+      );
+    }
+  };
+
+  const cancelLargeContextSubmission = () => {
+    setPendingSubmission(null);
+    setSkipLargeContextWarnings(false);
+  };
+
+  const confirmLargeContextSubmission = () => {
+    if (!pendingSubmission) return;
+    if (skipLargeContextWarnings) {
+      skipLargeContextWarningsForPage = true;
+    }
+
+    const submission = pendingSubmission;
+    setPendingSubmission(null);
+    setSkipLargeContextWarnings(false);
+    sendPreparedSubmission(submission.content, submission.preparedContext);
   };
 
   const DEFAULT_WIDTH = 380;
@@ -832,7 +941,9 @@ export function AiChatPanel({
             ))}
           </div>
         )}
-        {chat.error && <div className="ai-chat-error">{chat.error}</div>}
+        {(contextPreparationError || chat.error) && (
+          <div className="ai-chat-error">{contextPreparationError || chat.error}</div>
+        )}
         {scopeMode === 'selected' && selectedSheetIndices.length === 0 && (
           <div className="ai-chat-error">Vui lòng chọn ít nhất một sheet.</div>
         )}
@@ -885,6 +996,94 @@ export function AiChatPanel({
           <span className="ai-chat-hint">Enter để gửi · Shift + Enter để xuống dòng</span>
         </div>
       </div>
+
+      {pendingSubmission && (
+        <div className="modal-overlay" onClick={cancelLargeContextSubmission}>
+          <div
+            className="modal-container"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="large-context-dialog-title"
+            style={{ width: '420px' }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div className="modal-title" id="large-context-dialog-title">
+                <AlertTriangle size={17} style={{ color: '#f59e0b' }} />
+                <span>Dữ liệu gửi đến AI khá lớn</span>
+              </div>
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={cancelLargeContextSubmission}
+                title="Hủy gửi"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="modal-content" style={{ gap: '12px' }}>
+              <div style={{ fontSize: '12px', lineHeight: 1.55, color: 'var(--text-sub)' }}>
+                Phạm vi này có lượng thông tin cao bất thường. Việc gửi có thể làm tăng thời gian xử lý và chi phí AI.
+              </div>
+
+              <div className="ai-large-context-summary">
+                <div>
+                  <span>Sheet</span>
+                  <strong>{pendingSubmission.preparedContext.estimate.sheetCount.toLocaleString()}</strong>
+                </div>
+                <div>
+                  <span>Ô có dữ liệu</span>
+                  <strong>{pendingSubmission.preparedContext.estimate.nonEmptyCellCount.toLocaleString()}</strong>
+                </div>
+                <div>
+                  <span>Input ước tính</span>
+                  <strong>~{pendingSubmission.preparedContext.estimate.estimatedInputTokens.toLocaleString()} tokens</strong>
+                </div>
+                <div>
+                  <span>Chi phí input ước tính</span>
+                  <strong>{estimateCost(
+                    pendingSubmission.preparedContext.estimate.estimatedInputTokens,
+                    0,
+                    chat.selectedModel,
+                  )}</strong>
+                </div>
+              </div>
+
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                Đây là ước tính riêng cho dữ liệu sheet; lịch sử hội thoại và phản hồi của AI có thể làm tổng token và chi phí cao hơn.
+              </div>
+
+              <label className="ai-large-context-skip">
+                <input
+                  type="checkbox"
+                  checked={skipLargeContextWarnings}
+                  onChange={event => setSkipLargeContextWarnings(event.target.checked)}
+                />
+                <span>Không cảnh báo lại cho đến khi tải lại trang</span>
+              </label>
+            </div>
+
+            <div className="modal-footer" style={{ gap: '8px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={cancelLargeContextSubmission}
+                autoFocus
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={confirmLargeContextSubmission}
+              >
+                Vẫn gửi đến AI
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
