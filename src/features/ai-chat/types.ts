@@ -8,6 +8,14 @@ export type SheetScope =
       ranges: Array<{ startRow: number; startCol: number; endRow: number; endCol: number }>;
     };
 
+export type PdfScope =
+  | { type: 'current-page'; pageIndex: number }
+  | { type: 'selected-pages'; pageIndices: number[] }
+  | { type: 'all-pages' };
+
+export type DocumentScope = SheetScope | PdfScope;
+export type DocumentType = 'spreadsheet' | 'pdf';
+
 export interface SpreadsheetCellRecord {
   address: string;
   row: number;
@@ -31,22 +39,38 @@ export interface SpreadsheetSheetContext {
 }
 
 export interface SpreadsheetContextPayload {
+  documentType: 'spreadsheet';
   scope: SheetScope;
   sheets: SpreadsheetSheetContext[];
 }
 
-export interface WorkbookContextEstimate {
-  sheetCount: number;
-  nonEmptyCellCount: number;
+export interface PdfPageContext {
+  index: number;
+  pageNumber: number;
+  itemCount: number;
+  text: string;
+}
+
+export interface PdfContextPayload {
+  documentType: 'pdf';
+  scope: PdfScope;
+  pages: PdfPageContext[];
+}
+
+export type DocumentContextPayload = SpreadsheetContextPayload | PdfContextPayload;
+
+export interface DocumentContextEstimate {
+  documentUnitCount: number;
+  contentItemCount: number;
   sourceCharacters: number;
   serializedBytes: number;
   projectedGridCells: number;
   estimatedInputTokens: number;
 }
 
-export interface PreparedWorkbookContext {
-  context: SpreadsheetContextPayload;
-  estimate: WorkbookContextEstimate;
+export interface PreparedDocumentContext {
+  context: DocumentContextPayload;
+  estimate: DocumentContextEstimate;
 }
 
 export interface ChatUsage {
@@ -64,6 +88,7 @@ export interface ChatMessage {
 
 export const CHAT_CONTEXT_LIMITS = {
   maxSheets: 20,
+  maxPdfPages: 100,
   maxCells: 20_000,
   maxCharacters: 200_000,
   maxCellCharacters: 2_000,

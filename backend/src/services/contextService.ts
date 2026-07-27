@@ -1,11 +1,26 @@
-import type { ConversationContext, SheetContext } from '../schemas/conversation.js';
+import type {
+  ConversationContext,
+  PdfPageContext,
+  SheetContext,
+} from '../schemas/conversation.js';
 
-export interface ContextStats {
-  totalCells: number;
-  totalCharacters: number;
-}
+export type ContextStats =
+  | {
+    documentType: 'spreadsheet';
+    documentUnitCount: number;
+    contentItemCount: number;
+    totalCells: number;
+    totalCharacters: number;
+  }
+  | {
+    documentType: 'pdf';
+    documentUnitCount: number;
+    contentItemCount: number;
+    totalPages: number;
+    totalCharacters: number;
+  };
 
-export function validateContextSize(sheets: SheetContext[]): ContextStats {
+function validateSpreadsheetContext(sheets: SheetContext[]): ContextStats {
   let totalCells = 0;
   let totalCharacters = 0;
 
@@ -21,7 +36,41 @@ export function validateContextSize(sheets: SheetContext[]): ContextStats {
   if (totalCells > 20_000) throw new Error('CONTEXT_TOO_MANY_CELLS');
   if (totalCharacters > 200_000) throw new Error('CONTEXT_TOO_LARGE');
 
-  return { totalCells, totalCharacters };
+  return {
+    documentType: 'spreadsheet',
+    documentUnitCount: sheets.length,
+    contentItemCount: totalCells,
+    totalCells,
+    totalCharacters,
+  };
+}
+
+function validatePdfContext(pages: PdfPageContext[]): ContextStats {
+  if (pages.length > 100) throw new Error('CONTEXT_TOO_MANY_PAGES');
+
+  let totalCharacters = 0;
+  let totalItems = 0;
+
+  for (const page of pages) {
+    totalCharacters += page.text.length;
+    totalItems += page.itemCount;
+  }
+
+  if (totalCharacters > 200_000) throw new Error('CONTEXT_TOO_LARGE');
+
+  return {
+    documentType: 'pdf',
+    documentUnitCount: pages.length,
+    contentItemCount: totalItems,
+    totalPages: pages.length,
+    totalCharacters,
+  };
+}
+
+export function validateContextSize(context: ConversationContext): ContextStats {
+  return context.documentType === 'pdf'
+    ? validatePdfContext(context.pages)
+    : validateSpreadsheetContext(context.sheets);
 }
 
 export function serializeSheet(sheet: SheetContext) {
@@ -32,13 +81,21 @@ export function serializeSheet(sheet: SheetContext) {
   return serialized;
 }
 
+export function serializePdfPage(page: PdfPageContext) {
+  const serialized = JSON.stringify(page);
+  if (serialized.length > 350_000) {
+    throw new Error(`PDF_PAGE_CONTEXT_TOO_LARGE:${page.pageNumber}`);
+  }
+  return serialized;
+}
+
 export function buildSpreadsheetContext(serializedSheets: string[]): string {
   const result: string[] = [];
 
   for (const serialized of serializedSheets) {
     try {
       const sheet = JSON.parse(serialized);
-      
+
       let minRow = Infinity;
       let maxRow = -Infinity;
       let minCol = Infinity;
@@ -88,7 +145,7 @@ export function buildSpreadsheetContext(serializedSheets: string[]): string {
       };
 
       result.push(JSON.stringify(compactSheet));
-    } catch (e) {
+    } catch {
       result.push(serialized);
     }
   }
@@ -96,11 +153,36 @@ export function buildSpreadsheetContext(serializedSheets: string[]): string {
   return result.join('\n');
 }
 
+export function buildPdfContext(serializedPages: string[]): string {
+  const pages = serializedPages.map(serialized => {
+    try {
+      const page = JSON.parse(serialized) as PdfPageContext;
+      return JSON.stringify({
+        pageNumber: page.pageNumber,
+        text: page.text,
+      });
+    } catch {
+      return serialized;
+    }
+  });
+
+  return pages.join('\n');
+}
+
+export function buildDocumentContext(
+  documentType: ConversationContext['documentType'],
+  serializedUnits: string[],
+): string {
+  return documentType === 'pdf'
+    ? buildPdfContext(serializedUnits)
+    : buildSpreadsheetContext(serializedUnits);
+}
+
 function getColLetter(colIndex: number): string {
   let temp = colIndex;
   let letter = '';
   while (temp > 0) {
-    let tempCol = (temp - 1) % 26;
+    const tempCol = (temp - 1) % 26;
     letter = String.fromCharCode(tempCol + 65) + letter;
     temp = Math.floor((temp - tempCol - 1) / 26);
   }
@@ -110,10 +192,14 @@ function getColLetter(colIndex: number): string {
 export function getContextStatus(error: unknown) {
   const message = error instanceof Error ? error.message : 'INVALID_CONTEXT';
   if (message === 'CONVERSATION_NOT_FOUND') return 404;
-  if (message.startsWith('CONTEXT_') || message.startsWith('SHEET_CONTEXT_')) return 413;
+  if (
+    message.startsWith('CONTEXT_')
+    || message.startsWith('SHEET_CONTEXT_')
+    || message.startsWith('PDF_PAGE_CONTEXT_')
+  ) return 413;
   return 400;
 }
 
 export function contextFingerprint(context: ConversationContext) {
-  return JSON.stringify({ scope: context.scope, sheets: context.sheets });
+  return JSON.stringify(context);
 }

@@ -2,12 +2,12 @@ import type ExcelJS from 'exceljs';
 import { getCellText } from '../../sheet-viewer/utils/excelParser';
 import {
   CHAT_CONTEXT_LIMITS,
-  type PreparedWorkbookContext,
+  type DocumentContextEstimate,
+  type PreparedDocumentContext,
   type SheetScope,
   type SpreadsheetCellRecord,
   type SpreadsheetContextPayload,
   type SpreadsheetSheetContext,
-  type WorkbookContextEstimate,
 } from '../types';
 
 export class SpreadsheetContextError extends Error {}
@@ -74,7 +74,7 @@ export const LARGE_CONTEXT_WARNING_THRESHOLDS = {
   sourceCharacters: 100_000,
 } as const;
 
-export function isLargeWorkbookContext(estimate: WorkbookContextEstimate): boolean {
+export function isLargeDocumentContext(estimate: DocumentContextEstimate): boolean {
   return (
     estimate.estimatedInputTokens >= LARGE_CONTEXT_WARNING_THRESHOLDS.estimatedInputTokens
     || estimate.projectedGridCells >= LARGE_CONTEXT_WARNING_THRESHOLDS.projectedGridCells
@@ -85,7 +85,7 @@ export function isLargeWorkbookContext(estimate: WorkbookContextEstimate): boole
 export function prepareWorkbookContext(
   workbook: ExcelJS.Workbook,
   scope: SheetScope,
-): PreparedWorkbookContext {
+): PreparedDocumentContext {
   const sheetIndices = getScopeIndices(workbook, scope);
   const sheets: SpreadsheetSheetContext[] = [];
   let totalCells = 0;
@@ -182,7 +182,7 @@ export function prepareWorkbookContext(
     });
   }
 
-  const context: SpreadsheetContextPayload = { scope, sheets };
+  const context: SpreadsheetContextPayload = { documentType: 'spreadsheet', scope, sheets };
   const serializedContext = JSON.stringify(context);
   const serializedCharacters = serializedContext.length;
   const serializedBytes = new TextEncoder().encode(serializedContext).byteLength;
@@ -194,8 +194,8 @@ export function prepareWorkbookContext(
   return {
     context,
     estimate: {
-      sheetCount: sheets.length,
-      nonEmptyCellCount: totalCells,
+      documentUnitCount: sheets.length,
+      contentItemCount: totalCells,
       sourceCharacters: totalCharacters,
       serializedBytes,
       projectedGridCells,
@@ -208,5 +208,5 @@ export function serializeWorkbookContext(
   workbook: ExcelJS.Workbook,
   scope: SheetScope,
 ): SpreadsheetContextPayload {
-  return prepareWorkbookContext(workbook, scope).context;
+  return prepareWorkbookContext(workbook, scope).context as SpreadsheetContextPayload;
 }

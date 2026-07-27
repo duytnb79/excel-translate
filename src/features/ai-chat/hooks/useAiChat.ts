@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type ExcelJS from 'exceljs';
-import type { ChatMessage, ChatUsage, PreparedWorkbookContext, SheetScope } from '../types';
+import type { ChatMessage, ChatUsage, DocumentScope, PreparedDocumentContext } from '../types';
 import {
   createConversation,
   getConversationMessages,
@@ -11,7 +10,7 @@ import {
 } from '../services/chatApi';
 
 interface UseAiChatOptions {
-  workbook: ExcelJS.Workbook | null;
+  document: object | null;
   projectId: string | null;
   fileName: string;
   conversationId: string | null;
@@ -27,7 +26,7 @@ export function useAiChat(options: UseAiChatOptions) {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const createdConversationRef = useRef<string | null>(null);
-  const lastUploadedContextRef = useRef<{ scope: SheetScope; workbook: any } | null>(null);
+  const lastUploadedContextRef = useRef<{ scope: DocumentScope; document: object } | null>(null);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
@@ -87,11 +86,11 @@ export function useAiChat(options: UseAiChatOptions) {
     abortRef.current?.abort();
   }, []);
 
-  const sendMessage = useCallback(async (content: string, preparedContext: PreparedWorkbookContext) => {
+  const sendMessage = useCallback(async (content: string, preparedContext: PreparedDocumentContext) => {
     const message = content.trim();
     if (!message || isStreaming) return;
-    if (!options.workbook || !options.projectId) {
-      setError('Vui lòng tải một tệp Excel trước khi hỏi AI.');
+    if (!options.document || !options.projectId) {
+      setError('Vui lòng tải một tài liệu trước khi hỏi AI.');
       return;
     }
 
@@ -119,8 +118,8 @@ export function useAiChat(options: UseAiChatOptions) {
       const lastContextStringified = lastUploadedContextRef.current 
         ? JSON.stringify(lastUploadedContextRef.current.scope) 
         : '';
-      const workbookChanged = lastUploadedContextRef.current?.workbook !== options.workbook;
-      const contextChanged = !lastUploadedContextRef.current || contextStringified !== lastContextStringified || workbookChanged;
+      const documentChanged = lastUploadedContextRef.current?.document !== options.document;
+      const contextChanged = !lastUploadedContextRef.current || contextStringified !== lastContextStringified || documentChanged;
 
       if (!conversationId) {
         const created = await createConversation({
@@ -130,11 +129,11 @@ export function useAiChat(options: UseAiChatOptions) {
         });
         conversationId = created.conversationId;
         createdConversationRef.current = conversationId;
-        lastUploadedContextRef.current = { scope: JSON.parse(JSON.stringify(context.scope)), workbook: options.workbook };
+        lastUploadedContextRef.current = { scope: JSON.parse(JSON.stringify(context.scope)), document: options.document };
         await options.onConversationCreated(conversationId);
       } else if (contextChanged) {
         await replaceConversationContext(conversationId, context);
-        lastUploadedContextRef.current = { scope: JSON.parse(JSON.stringify(context.scope)), workbook: options.workbook };
+        lastUploadedContextRef.current = { scope: JSON.parse(JSON.stringify(context.scope)), document: options.document };
       }
 
       const controller = new AbortController();

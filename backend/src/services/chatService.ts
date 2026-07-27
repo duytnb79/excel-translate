@@ -2,13 +2,14 @@ import { getAiProvider } from '../providers/providerRegistry.js';
 import {
   addAssistantMessage,
   addUserMessage,
-  getContextSheets,
+  getContextUnits,
   getConversation,
   getRecentMessages,
   updateConversationTitle,
 } from '../repositories/conversationRepository.js';
 import { recordTokenUsage, reserveDailyRequest } from '../repositories/usageRepository.js';
-import { buildSpreadsheetContext } from './contextService.js';
+import { buildDocumentContext } from './contextService.js';
+import type { DocumentType } from '../schemas/conversation.js';
 import { resolveAllowedModel } from './modelCatalogService.js';
 
 interface StreamChatInput {
@@ -24,12 +25,12 @@ export async function streamChat(input: StreamChatInput) {
   const conversation = await getConversation(input.uid, input.conversationId);
   if (!conversation) throw new Error('CONVERSATION_NOT_FOUND');
 
-  const serializedSheets = await getContextSheets(
+  const serializedUnits = await getContextUnits(
     input.uid,
     input.conversationId,
     conversation.contextVersion,
   );
-  if (serializedSheets.length === 0) throw new Error('CONVERSATION_CONTEXT_MISSING');
+  if (serializedUnits.length === 0) throw new Error('CONVERSATION_CONTEXT_MISSING');
 
   const model = resolveAllowedModel(input.model);
   const provider = getAiProvider(model);
@@ -46,7 +47,8 @@ export async function streamChat(input: StreamChatInput) {
 
   const result = await provider.streamCompletion({
     model,
-    spreadsheetContext: buildSpreadsheetContext(serializedSheets),
+    documentType: conversation.documentType,
+    documentContext: buildDocumentContext(conversation.documentType, serializedUnits),
     messages: [...priorMessages, { role: 'user', content: input.message }],
     signal: input.signal,
     onDelta: input.onDelta,
@@ -65,7 +67,13 @@ export async function streamChat(input: StreamChatInput) {
   ]);
 
   if (isFirstMessage) {
-    void generateAndSaveConversationTitle(input.uid, input.conversationId, input.message, model);
+    void generateAndSaveConversationTitle(
+      input.uid,
+      input.conversationId,
+      input.message,
+      model,
+      conversation.documentType,
+    );
   }
 
   return {
@@ -79,7 +87,8 @@ export async function generateAndSaveConversationTitle(
   uid: string,
   conversationId: string,
   firstMessage: string,
-  model: string
+  model: string,
+  documentType: DocumentType,
 ) {
   try {
     const provider = getAiProvider(model);
@@ -91,7 +100,8 @@ Tiêu đề:`;
 
     const result = await provider.streamCompletion({
       model,
-      spreadsheetContext: '',
+      documentType,
+      documentContext: '',
       messages: [{ role: 'user', content: prompt }],
       signal: new AbortController().signal,
       onDelta: () => {},

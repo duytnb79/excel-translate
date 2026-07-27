@@ -1230,7 +1230,7 @@ export const App: React.FC = () => {
                 </button>
               )}
 
-              {!pdfBuffer && origWorkbook && (
+              {(pdfBuffer ? pdfData : origWorkbook) && (
                 <button
                   type="button"
                   className={`btn btn-secondary ai-chat-toggle ${showAiPanel ? 'active' : ''}`}
@@ -1242,7 +1242,9 @@ export const App: React.FC = () => {
                     setShowAiPanel(current => !current);
                   }}
                   title={aiAccessStatus === 'connected'
-                    ? (showAiPanel ? 'Đóng trợ lý AI' : 'Phân tích bảng tính bằng AI')
+                    ? (showAiPanel
+                        ? 'Đóng trợ lý AI'
+                        : (pdfBuffer ? 'Phân tích tài liệu PDF bằng AI' : 'Phân tích bảng tính bằng AI'))
                     : 'Kết nối secret key để sử dụng AI Chat'}
                 >
                   <MessageSquare size={14} />
@@ -1347,23 +1349,30 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {showAiPanel && aiAccessStatus === 'connected' && origWorkbook && activeProjectId && file && !pdfBuffer && (
-        <AiChatPanel
-          workbook={origWorkbook}
-          activeSheetIndex={effectiveActiveSheetIndex}
-          projectId={activeProjectId}
-          fileName={file.name}
-          conversationId={aiConversationId}
-          onConversationCreated={handleAiConversationCreated}
-          onConversationSelected={handleAiConversationCreated}
-          onConversationReset={handleAiConversationReset}
-          onClose={() => setShowAiPanel(false)}
-          selectionMode={selectionMode}
-          selectedRanges={selectedRanges}
-          onSelectionChange={setSelectedRanges}
-          onSelectionModeChange={setSelectionMode}
-        />
-      )}
+      {showAiPanel
+        && aiAccessStatus === 'connected'
+        && activeProjectId
+        && file
+        && (pdfBuffer ? pdfData : origWorkbook)
+        && (
+          <AiChatPanel
+            workbook={pdfBuffer ? null : origWorkbook}
+            activeSheetIndex={effectiveActiveSheetIndex}
+            pdfData={pdfBuffer ? pdfData : null}
+            activePdfPageIndex={pdfPageIndex}
+            projectId={activeProjectId}
+            fileName={file.name}
+            conversationId={aiConversationId}
+            onConversationCreated={handleAiConversationCreated}
+            onConversationSelected={handleAiConversationCreated}
+            onConversationReset={handleAiConversationReset}
+            onClose={() => setShowAiPanel(false)}
+            selectionMode={selectionMode}
+            selectedRanges={selectedRanges}
+            onSelectionChange={setSelectedRanges}
+            onSelectionModeChange={setSelectionMode}
+          />
+        )}
 
       {/* Settings Configuration Modal */}
       <SettingsModal 

@@ -35,7 +35,7 @@ conversationsRouter.post('/', async (req, res) => {
   try {
     const { uid } = req as unknown as AuthenticatedRequest;
     const input = createConversationSchema.parse(req.body);
-    const result = await createConversation(uid, input, validateContextSize(input.sheets));
+    const result = await createConversation(uid, input, validateContextSize(input));
     res.status(201).json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to create conversation';
@@ -52,7 +52,7 @@ conversationsRouter.put('/:conversationId/context', async (req, res) => {
       uid,
       conversationId,
       input,
-      validateContextSize(input.sheets),
+      validateContextSize(input),
     );
     res.json(result);
   } catch (error) {

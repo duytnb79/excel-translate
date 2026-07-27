@@ -3,7 +3,7 @@ import { getAiAccessKey } from './aiAccess';
 import type {
   ChatMessage,
   ChatUsage,
-  SpreadsheetContextPayload,
+  DocumentContextPayload,
 } from '../types';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
@@ -19,10 +19,10 @@ interface ModelCatalog {
   models: AiModelOption[];
 }
 
-interface CreateConversationInput extends SpreadsheetContextPayload {
+type CreateConversationInput = DocumentContextPayload & {
   projectId: string;
   fileName: string;
-}
+};
 
 async function authenticatedFetch(path: string, init?: RequestInit) {
   const accessKey = getAiAccessKey();
@@ -62,7 +62,7 @@ export async function createConversation(input: CreateConversationInput) {
 
 export async function replaceConversationContext(
   conversationId: string,
-  context: SpreadsheetContextPayload,
+  context: DocumentContextPayload,
 ) {
   const response = await authenticatedFetch(`/api/conversations/${conversationId}/context`, {
     method: 'PUT',

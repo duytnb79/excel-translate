@@ -3,10 +3,10 @@ import { firestore } from '../lib/firebase.js';
 import type {
   ConversationContext,
   CreateConversationInput,
-  SheetContext,
+  DocumentType,
 } from '../schemas/conversation.js';
 import type { ContextStats } from '../services/contextService.js';
-import { serializeSheet } from '../services/contextService.js';
+import { serializePdfPage, serializeSheet } from '../services/contextService.js';
 
 export interface StoredMessage {
   id: string;
@@ -23,19 +23,37 @@ async function storeContext(
   uid: string,
   conversationId: string,
   version: number,
-  sheets: SheetContext[],
+  context: ConversationContext,
 ) {
   const batch = firestore.batch();
   const contexts = conversationRef(uid, conversationId).collection('contexts');
 
-  for (const sheet of sheets) {
-    batch.set(contexts.doc(`v${version}_sheet_${sheet.index}`), {
-      version,
-      sheetIndex: sheet.index,
-      sheetName: sheet.name,
-      serialized: serializeSheet(sheet),
-      createdAt: FieldValue.serverTimestamp(),
-    });
+  if (context.documentType === 'pdf') {
+    for (const page of context.pages) {
+      batch.set(contexts.doc(`v${version}_page_${page.index}`), {
+        version,
+        documentType: context.documentType,
+        unitType: 'page',
+        unitIndex: page.index,
+        pageIndex: page.index,
+        pageNumber: page.pageNumber,
+        serialized: serializePdfPage(page),
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+  } else {
+    for (const sheet of context.sheets) {
+      batch.set(contexts.doc(`v${version}_sheet_${sheet.index}`), {
+        version,
+        documentType: context.documentType,
+        unitType: 'sheet',
+        unitIndex: sheet.index,
+        sheetIndex: sheet.index,
+        sheetName: sheet.name,
+        serialized: serializeSheet(sheet),
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
   }
 
   await batch.commit();
@@ -51,6 +69,7 @@ export async function createConversation(
     projectId: input.projectId,
     fileName: input.fileName,
     title: 'Hội thoại mới',
+    documentType: input.documentType,
     scope: input.scope,
     contextVersion: 1,
     contextStats,
@@ -59,7 +78,7 @@ export async function createConversation(
     totalInputTokens: 0,
     totalOutputTokens: 0,
   });
-  await storeContext(uid, ref.id, 1, input.sheets);
+  await storeContext(uid, ref.id, 1, input);
   return { conversationId: ref.id, contextVersion: 1 };
 }
 
@@ -76,6 +95,7 @@ export async function replaceConversationContext(
 
     const nextVersion = Number(snapshot.get('contextVersion') || 0) + 1;
     transaction.update(ref, {
+      documentType: input.documentType,
       scope: input.scope,
       contextVersion: nextVersion,
       contextStats,
@@ -84,7 +104,7 @@ export async function replaceConversationContext(
     return nextVersion;
   });
 
-  await storeContext(uid, conversationId, version, input.sheets);
+  await storeContext(uid, conversationId, version, input);
   return { conversationId, contextVersion: version };
 }
 
@@ -92,13 +112,17 @@ export async function getConversation(uid: string, conversationId: string) {
   const ref = conversationRef(uid, conversationId);
   const snapshot = await ref.get();
   if (!snapshot.exists) return null;
+  const storedDocumentType = snapshot.get('documentType');
+  const documentType: DocumentType = storedDocumentType === 'pdf' ? 'pdf' : 'spreadsheet';
+
   return {
     ref,
+    documentType,
     contextVersion: Number(snapshot.get('contextVersion') || 1),
   };
 }
 
-export async function getContextSheets(
+export async function getContextUnits(
   uid: string,
   conversationId: string,
   version: number,
@@ -108,8 +132,12 @@ export async function getContextSheets(
     .where('version', '==', version)
     .get();
 
+  const getUnitIndex = (doc: (typeof snapshot.docs)[number]) => Number(
+    doc.get('unitIndex') ?? doc.get('sheetIndex') ?? doc.get('pageIndex') ?? 0,
+  );
+
   return snapshot.docs
-    .sort((a, b) => Number(a.get('sheetIndex')) - Number(b.get('sheetIndex')))
+    .sort((a, b) => getUnitIndex(a) - getUnitIndex(b))
     .map(doc => String(doc.get('serialized')));
 }
 
@@ -213,6 +241,7 @@ export async function listConversations(uid: string, projectId?: string) {
     projectId: doc.get('projectId') as string,
     fileName: doc.get('fileName') as string,
     title: (doc.get('title') || 'Hội thoại mới') as string,
+    documentType: doc.get('documentType') === 'pdf' ? 'pdf' : 'spreadsheet',
     scope: doc.get('scope'),
     totalInputTokens: (doc.get('totalInputTokens') || 0) as number,
     totalOutputTokens: (doc.get('totalOutputTokens') || 0) as number,

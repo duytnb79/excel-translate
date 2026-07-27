@@ -1,3 +1,5 @@
+import type { DocumentType } from '../schemas/conversation.js';
+
 export interface AiMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -5,7 +7,8 @@ export interface AiMessage {
 
 export interface StreamCompletionInput {
   model: string;
-  spreadsheetContext: string;
+  documentType: DocumentType;
+  documentContext: string;
   messages: AiMessage[];
   signal: AbortSignal;
   onDelta: (text: string) => void;

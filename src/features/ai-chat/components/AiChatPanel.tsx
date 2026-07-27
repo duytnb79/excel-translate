@@ -2,12 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Bot, Send, Square, X, Info, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { useAiChat } from '../hooks/useAiChat';
 import { getConversations, deleteConversation } from '../services/chatApi';
-import type { PreparedWorkbookContext, SheetScope } from '../types';
-import { isLargeWorkbookContext, prepareWorkbookContext } from '../utils/serializeWorkbook';
+import type { PdfDocumentData } from '../../pdf-viewer/utils/pdfParser';
+import type { DocumentScope, PdfScope, PreparedDocumentContext, SheetScope } from '../types';
+import { isLargeDocumentContext, prepareWorkbookContext } from '../utils/serializeWorkbook';
+import { preparePdfContext } from '../utils/serializePdf';
 
 interface AiChatPanelProps {
-  workbook: any;
-  activeSheetIndex: number;
+  workbook?: any | null;
+  activeSheetIndex?: number;
+  pdfData?: PdfDocumentData | null;
+  activePdfPageIndex?: number;
   projectId: string;
   fileName: string;
   conversationId: string | null;
@@ -51,7 +55,7 @@ function estimateCost(inputTokens: number, outputTokens: number, model?: string)
   return `$${totalCost.toFixed(5)}`;
 }
 
-type ScopeMode = SheetScope['type'];
+type ScopeMode = DocumentScope['type'];
 
 let skipLargeContextWarningsForPage = false;
 
@@ -303,8 +307,10 @@ function renderMarkdown(text: string): React.ReactNode {
 }
 
 export function AiChatPanel({
-  workbook,
-  activeSheetIndex,
+  workbook = null,
+  activeSheetIndex = 0,
+  pdfData = null,
+  activePdfPageIndex = 0,
   projectId,
   fileName,
   conversationId,
@@ -317,16 +323,18 @@ export function AiChatPanel({
   onConversationSelected,
   onConversationReset
 }: AiChatPanelProps) {
+  const isPdf = Boolean(pdfData);
   const [draft, setDraft] = useState('');
-  const [scopeMode, setScopeMode] = useState<ScopeMode>('current');
+  const [scopeMode, setScopeMode] = useState<ScopeMode>(isPdf ? 'current-page' : 'current');
   const [selectedSheetIndices, setSelectedSheetIndices] = useState<number[]>([activeSheetIndex]);
+  const [selectedPdfPageIndices, setSelectedPdfPageIndices] = useState<number[]>([activePdfPageIndex]);
   const messageListRef = useRef<HTMLDivElement>(null);
   const [historyList, setHistoryList] = useState<Array<{ id: string; title?: string; updatedAt: string }>>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [pendingSubmission, setPendingSubmission] = useState<{
     content: string;
-    preparedContext: PreparedWorkbookContext;
+    preparedContext: PreparedDocumentContext;
   } | null>(null);
   const [skipLargeContextWarnings, setSkipLargeContextWarnings] = useState(false);
   const [contextPreparationError, setContextPreparationError] = useState<string | null>(null);
@@ -370,7 +378,7 @@ export function AiChatPanel({
   }, [projectId]);
 
   const chat = useAiChat({
-    workbook,
+    document: pdfData || workbook,
     projectId,
     fileName,
     conversationId,
@@ -385,8 +393,17 @@ export function AiChatPanel({
   }, [loadHistory, conversationId]);
 
   useEffect(() => {
+    setScopeMode(isPdf ? 'current-page' : 'current');
+    setContextPreparationError(null);
+  }, [isPdf]);
+
+  useEffect(() => {
     if (scopeMode === 'current') setSelectedSheetIndices([activeSheetIndex]);
   }, [activeSheetIndex, scopeMode]);
+
+  useEffect(() => {
+    if (scopeMode === 'current-page') setSelectedPdfPageIndices([activePdfPageIndex]);
+  }, [activePdfPageIndex, scopeMode]);
 
   useEffect(() => {
     const element = messageListRef.current;
@@ -413,7 +430,15 @@ export function AiChatPanel({
     return { totalTokens: tokens, totalCost: cost };
   }, [chat.messages]);
 
-  const scope = useMemo<SheetScope>(() => {
+  const scope = useMemo<DocumentScope>(() => {
+    if (isPdf) {
+      if (scopeMode === 'selected-pages') {
+        return { type: 'selected-pages', pageIndices: selectedPdfPageIndices };
+      }
+      if (scopeMode === 'all-pages') return { type: 'all-pages' };
+      return { type: 'current-page', pageIndex: activePdfPageIndex };
+    }
+
     if (scopeMode === 'all') return { type: 'all' };
     if (scopeMode === 'selected') {
       return { type: 'selected', sheetIndices: selectedSheetIndices };
@@ -426,9 +451,17 @@ export function AiChatPanel({
       };
     }
     return { type: 'current', sheetIndex: activeSheetIndex };
-  }, [activeSheetIndex, scopeMode, selectedSheetIndices, selectedRanges]);
+  }, [
+    activePdfPageIndex,
+    activeSheetIndex,
+    isPdf,
+    scopeMode,
+    selectedPdfPageIndices,
+    selectedRanges,
+    selectedSheetIndices
+  ]);
 
-  const sendPreparedSubmission = (content: string, preparedContext: PreparedWorkbookContext) => {
+  const sendPreparedSubmission = (content: string, preparedContext: PreparedDocumentContext) => {
     setDraft('');
     setContextPreparationError(null);
     void chat.sendMessage(content, preparedContext);
@@ -437,14 +470,23 @@ export function AiChatPanel({
   const submit = () => {
     if (!draft.trim()) return;
     if (scopeMode === 'selected' && selectedSheetIndices.length === 0) return;
+    if (scopeMode === 'selected-pages' && selectedPdfPageIndices.length === 0) return;
     if (scopeMode === 'range' && selectedRanges.length === 0) return;
 
     try {
       const content = draft;
-      const preparedContext = prepareWorkbookContext(workbook, scope);
+      let preparedContext: PreparedDocumentContext;
+
+      if (isPdf) {
+        if (!pdfData) throw new Error('Không tìm thấy dữ liệu PDF để phân tích.');
+        preparedContext = preparePdfContext(pdfData, scope as PdfScope);
+      } else {
+        if (!workbook) throw new Error('Không tìm thấy dữ liệu bảng tính để phân tích.');
+        preparedContext = prepareWorkbookContext(workbook, scope as SheetScope);
+      }
       setContextPreparationError(null);
 
-      if (!skipLargeContextWarningsForPage && isLargeWorkbookContext(preparedContext.estimate)) {
+      if (!skipLargeContextWarningsForPage && isLargeDocumentContext(preparedContext.estimate)) {
         setSkipLargeContextWarnings(false);
         setPendingSubmission({ content, preparedContext });
         return;
@@ -538,6 +580,28 @@ export function AiChatPanel({
     ));
   };
 
+  const togglePdfPage = (index: number) => {
+    setSelectedPdfPageIndices(current => (
+      current.includes(index)
+        ? current.filter(item => item !== index)
+        : [...current, index].sort((a, b) => a - b)
+    ));
+  };
+
+  const suggestedPrompts = isPdf
+    ? [
+        { label: '📄 Tóm tắt tài liệu', prompt: 'Hãy tóm tắt các thông tin chính trong các trang PDF đã chọn.' },
+        { label: '🔍 Tìm thông tin', prompt: 'Hãy liệt kê các dữ kiện, con số và kết luận quan trọng trong tài liệu này.' },
+        { label: '✅ Việc cần làm', prompt: 'Hãy xác định các hành động, thời hạn hoặc trách nhiệm được nhắc đến trong tài liệu.' },
+        { label: '💡 Giải thích nội dung', prompt: 'Hãy giải thích nội dung tài liệu này theo cách ngắn gọn và dễ hiểu.' }
+      ]
+    : [
+        { label: '📊 Tóm tắt sheet', prompt: 'Hãy tóm tắt các thông tin chính của sheet hiện tại.' },
+        { label: '🔍 Tìm ô lỗi/trống', prompt: 'Hãy tìm giúp tôi các giá trị bất thường, bị lỗi hoặc ô trống trong sheet này.' },
+        { label: '🏆 Tìm Max/Min', prompt: 'Hãy phân tích sheet này và chỉ ra dòng/cột có giá trị lớn nhất.' },
+        { label: '💡 Tối ưu công thức', prompt: 'Hãy gợi ý cách tối ưu hóa các công thức trong bảng tính này.' }
+      ];
+
   return (
     <aside className="ai-chat-panel" style={{ width: `${width}px`, position: 'relative' }}>
       <div 
@@ -550,7 +614,9 @@ export function AiChatPanel({
         <div className="ai-chat-title-group" style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 }} ref={dropdownRef}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--accent)' }}>
             <Bot size={17} style={{ flexShrink: 0 }} />
-            <strong style={{ fontSize: '13px', color: 'var(--text-main)', fontWeight: 700 }}>Phân tích bảng tính</strong>
+            <strong style={{ fontSize: '13px', color: 'var(--text-main)', fontWeight: 700 }}>
+              {isPdf ? 'Phân tích tài liệu PDF' : 'Phân tích bảng tính'}
+            </strong>
           </div>
           {historyList.length > 0 && (
             <div style={{ position: 'relative', display: 'inline-block' }}>
@@ -715,10 +781,20 @@ export function AiChatPanel({
             disabled={chat.isStreaming}
             onChange={event => setScopeMode(event.target.value as ScopeMode)}
           >
-            <option value="current">Sheet hiện tại</option>
-            <option value="selected">Chọn nhiều sheet</option>
-            <option value="all">Tất cả sheet</option>
-            <option value="range">Vùng chọn hiện tại</option>
+            {isPdf ? (
+              <>
+                <option value="current-page">Trang hiện tại</option>
+                <option value="selected-pages">Chọn nhiều trang</option>
+                <option value="all-pages">Tất cả trang</option>
+              </>
+            ) : (
+              <>
+                <option value="current">Sheet hiện tại</option>
+                <option value="selected">Chọn nhiều sheet</option>
+                <option value="all">Tất cả sheet</option>
+                <option value="range">Vùng chọn hiện tại</option>
+              </>
+            )}
           </select>
         </label>
 
@@ -803,7 +879,7 @@ export function AiChatPanel({
           </div>
         )}
 
-        {scopeMode === 'selected' && (
+        {scopeMode === 'selected' && workbook && (
           <div className="ai-sheet-picker">
             {workbook.worksheets.map((sheet: any, index: number) => (
               <label key={sheet.id} className="ai-sheet-option">
@@ -819,6 +895,22 @@ export function AiChatPanel({
           </div>
         )}
 
+        {scopeMode === 'selected-pages' && pdfData && (
+          <div className="ai-sheet-picker">
+            {pdfData.pages.map(page => (
+              <label key={page.pageIndex} className="ai-sheet-option">
+                <input
+                  type="checkbox"
+                  checked={selectedPdfPageIndices.includes(page.pageIndex)}
+                  disabled={chat.isStreaming}
+                  onChange={() => togglePdfPage(page.pageIndex)}
+                />
+                <span>Trang {page.pageIndex + 1}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
       </div>
 
       <div ref={messageListRef} className="ai-chat-messages">
@@ -827,8 +919,12 @@ export function AiChatPanel({
         ) : chat.messages.length === 0 ? (
           <div className="ai-chat-empty">
             <Bot size={30} strokeWidth={1.5} />
-            <strong>Hỏi AI về dữ liệu trong sheet</strong>
-            <span>Ví dụ: “Tóm tắt sheet này” hoặc “So sánh doanh thu giữa các sheet”.</span>
+            <strong>{isPdf ? 'Hỏi AI về nội dung PDF' : 'Hỏi AI về dữ liệu trong sheet'}</strong>
+            <span>
+              {isPdf
+                ? 'Ví dụ: “Tóm tắt trang này” hoặc “Liệt kê các nội dung quan trọng trong tài liệu”.'
+                : 'Ví dụ: “Tóm tắt sheet này” hoặc “So sánh doanh thu giữa các sheet”.'}
+            </span>
           </div>
         ) : (
           <>
@@ -899,12 +995,7 @@ export function AiChatPanel({
             marginBottom: '8px',
             padding: '0 4px'
           }}>
-            {[
-              { label: '📊 Tóm tắt sheet', prompt: 'Hãy tóm tắt các thông tin chính của sheet hiện tại.' },
-              { label: '🔍 Tìm ô lỗi/trống', prompt: 'Hãy tìm giúp tôi các giá trị bất thường, bị lỗi hoặc ô trống trong sheet này.' },
-              { label: '🏆 Tìm Max/Min', prompt: 'Hãy phân tích sheet này và chỉ ra dòng/cột có giá trị lớn nhất.' },
-              { label: '💡 Tối ưu công thức', prompt: 'Hãy gợi ý cách tối ưu hóa các công thức trong bảng tính này.' }
-            ].map((item, idx) => (
+            {suggestedPrompts.map((item, idx) => (
               <button
                 key={idx}
                 type="button"
@@ -947,6 +1038,9 @@ export function AiChatPanel({
         {scopeMode === 'selected' && selectedSheetIndices.length === 0 && (
           <div className="ai-chat-error">Vui lòng chọn ít nhất một sheet.</div>
         )}
+        {scopeMode === 'selected-pages' && selectedPdfPageIndices.length === 0 && (
+          <div className="ai-chat-error">Vui lòng chọn ít nhất một trang PDF.</div>
+        )}
         {scopeMode === 'range' && selectedRanges.length === 0 && (
           <div className="ai-chat-error">Vui lòng bấm nút chọn vùng và quét vùng ô trên sheet.</div>
         )}
@@ -955,7 +1049,7 @@ export function AiChatPanel({
             id="ai-chat-input"
             value={draft}
             disabled={chat.isStreaming}
-            placeholder="Hỏi về dữ liệu trong bảng tính..."
+            placeholder={isPdf ? 'Hỏi về nội dung tài liệu PDF...' : 'Hỏi về dữ liệu trong bảng tính...'}
             rows={3}
             onChange={event => setDraft(event.target.value)}
             onKeyDown={event => {
@@ -973,7 +1067,12 @@ export function AiChatPanel({
             <button
               type="button"
               className="ai-send-button"
-              disabled={!draft.trim() || (scopeMode === 'selected' && selectedSheetIndices.length === 0)}
+              disabled={
+                !draft.trim()
+                || (scopeMode === 'selected' && selectedSheetIndices.length === 0)
+                || (scopeMode === 'selected-pages' && selectedPdfPageIndices.length === 0)
+                || (scopeMode === 'range' && selectedRanges.length === 0)
+              }
               onClick={submit}
               title="Gửi câu hỏi"
             >
@@ -1029,12 +1128,12 @@ export function AiChatPanel({
 
               <div className="ai-large-context-summary">
                 <div>
-                  <span>Sheet</span>
-                  <strong>{pendingSubmission.preparedContext.estimate.sheetCount.toLocaleString()}</strong>
+                  <span>{pendingSubmission.preparedContext.context.documentType === 'pdf' ? 'Trang' : 'Sheet'}</span>
+                  <strong>{pendingSubmission.preparedContext.estimate.documentUnitCount.toLocaleString()}</strong>
                 </div>
                 <div>
-                  <span>Ô có dữ liệu</span>
-                  <strong>{pendingSubmission.preparedContext.estimate.nonEmptyCellCount.toLocaleString()}</strong>
+                  <span>{pendingSubmission.preparedContext.context.documentType === 'pdf' ? 'Đoạn văn bản' : 'Ô có dữ liệu'}</span>
+                  <strong>{pendingSubmission.preparedContext.estimate.contentItemCount.toLocaleString()}</strong>
                 </div>
                 <div>
                   <span>Input ước tính</span>
@@ -1051,7 +1150,7 @@ export function AiChatPanel({
               </div>
 
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.45 }}>
-                Đây là ước tính riêng cho dữ liệu sheet; lịch sử hội thoại và phản hồi của AI có thể làm tổng token và chi phí cao hơn.
+                Đây là ước tính riêng cho dữ liệu tài liệu; lịch sử hội thoại và phản hồi của AI có thể làm tổng token và chi phí cao hơn.
               </div>
 
               <label className="ai-large-context-skip">
